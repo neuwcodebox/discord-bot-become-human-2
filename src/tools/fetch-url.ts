@@ -11,10 +11,14 @@ export async function fetchUrl(input: {
   try {
     const response = await fetch(input.url, { signal: controller.signal, redirect: "follow" });
     const contentType = response.headers.get("content-type") ?? "application/octet-stream";
-    if (
-      input.allowedContentTypes?.length &&
-      !input.allowedContentTypes.some((type) => contentType.includes(type))
-    ) {
+    const allowedContentTypes = input.allowedContentTypes ?? [
+      "text/",
+      "application/json",
+      "application/xml",
+      "application/yaml",
+      "application/x-yaml",
+    ];
+    if (allowedContentTypes.length && !allowedContentTypes.some((type) => contentType.includes(type))) {
       throw new Error(`Unsupported content-type: ${contentType}`);
     }
     const reader = response.body?.getReader();

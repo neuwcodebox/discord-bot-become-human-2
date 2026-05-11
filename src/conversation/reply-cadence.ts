@@ -6,9 +6,10 @@ export function checkReplyHardGates(
   config: AppConfig,
   state: ConversationRuntimeState,
   message: NormalizedDiscordMessage,
-  options: { unprompted: boolean },
+  options: { unprompted: boolean; botUserId?: string | undefined; botNames?: string[] },
 ): ReplyGateResult {
   const now = Date.now();
+  const directedAtBot = isDirectedAtBot(message, options.botUserId, options.botNames);
   if (state.cooldownUntil && Date.parse(state.cooldownUntil) > now) {
     return { allowed: false, reason: "cooldownUntil is active" };
   }
@@ -21,10 +22,7 @@ export function checkReplyHardGates(
       return { allowed: false, reason: "minSecondsBetweenUnpromptedReplies gate" };
     }
   }
-  if (
-    state.consecutiveBotReplies >= config.conversation.engaged.maxConsecutiveBotReplies &&
-    !isDirectedAtBot(message)
-  ) {
+  if (state.consecutiveBotReplies >= config.conversation.engaged.maxConsecutiveBotReplies && !directedAtBot) {
     return { allowed: false, reason: "maxConsecutiveBotReplies gate" };
   }
   return { allowed: true };

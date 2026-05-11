@@ -34,12 +34,21 @@ export async function main(): Promise<void> {
 
   const client = createDiscordClient(config);
   const runner = new PiCodexAgentRunner(config);
-  const orchestrator = new ConversationOrchestrator(config, paths.resourcesAgentsPath, runner, {
-    ...(client.user?.id ? { userId: client.user.id } : {}),
-    names: ["bot"],
-  });
+  const botIdentity: { userId?: string; names: string[] } = { names: ["bot"] };
+  const orchestrator = new ConversationOrchestrator(config, paths.resourcesAgentsPath, runner, botIdentity);
   wireDiscordEvents({ client, config, paths, orchestrator });
   client.once("ready", (readyClient) => {
+    botIdentity.userId = readyClient.user.id;
+    botIdentity.names = [
+      ...new Set(
+        [
+          readyClient.user.username,
+          readyClient.user.globalName,
+          readyClient.user.tag,
+          ...botIdentity.names,
+        ].filter((name): name is string => Boolean(name)),
+      ),
+    ];
     log.info({ userId: readyClient.user.id, tag: readyClient.user.tag }, "discord client ready");
   });
   await loginDiscord(client, config);

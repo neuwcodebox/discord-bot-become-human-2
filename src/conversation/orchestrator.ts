@@ -117,7 +117,11 @@ export class ConversationOrchestrator {
       return;
     }
 
-    const gate = checkReplyHardGates(this.config, state, message, { unprompted: !relatedToBot });
+    const gate = checkReplyHardGates(this.config, state, message, {
+      unprompted: false,
+      botUserId: this.botIdentity.userId,
+      botNames: this.botIdentity.names,
+    });
     const stay = gate.allowed
       ? await decideStay({
           runner: this.runner,
@@ -156,6 +160,7 @@ export class ConversationOrchestrator {
           messageId: event.messageId,
           action: stay.action,
           confidence: stay.confidence,
+          reason: stay.reason,
         },
         "engaged conversation stayed silent",
       );

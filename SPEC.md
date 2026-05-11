@@ -1172,6 +1172,9 @@ engaged 상태의 억제 원칙:
 ```txt
 - 사람이 서로 주고받는 모든 메시지에 답하지 않는다.
 - 마지막 봇 발화 후 사람의 명시적 질문/반응이 없으면 우선 silent_track한다.
+- engaged 상태에서 들어온 human follow-up message는 그 자체로 대화 입력이다. not_engaged ambient
+  reply에 쓰는 긴 unprompted interval로 hard block하지 않고, 짧은 reply interval/cooldown과
+  stay decision으로 답변 여부를 판단한다.
 - consecutiveBotReplies가 maxConsecutiveBotReplies에 도달하면 직접 호출 전까지 reply하지 않는다.
 - human_to_human attention이면 replyConfidenceThreshold를 더 높게 적용한다.
 - directed_at_bot이면 replyConfidenceThreshold를 낮게 적용한다.

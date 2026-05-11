@@ -1,0 +1,207 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import { z } from "zod";
+import type { AppConfig } from "./types.js";
+
+const tupleMsSchema = z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]);
+
+const configSchema: z.ZodType<AppConfig> = z.object({
+  discord: z.object({
+    tokenEnv: z.string().min(1),
+    allowedGuildIds: z.array(z.string()),
+    allowedChannelIds: z.array(z.string()),
+    enableMentions: z.boolean(),
+    enableReplies: z.boolean(),
+    enableReactions: z.boolean(),
+    enableMessageEditStreaming: z.boolean(),
+  }),
+  llm: z.object({
+    provider: z.literal("openai-codex"),
+    model: z.string().min(1),
+    reasoning: z.enum(["low", "medium", "high", "xhigh"]),
+    codex: z.object({
+      authPath: z.string().min(1),
+      transport: z.enum(["auto", "responses", "websocket"]),
+    }),
+  }),
+  runtime: z.object({
+    rootDir: z.string().min(1),
+    defaultLocale: z.string().min(1),
+    timezone: z.string().min(1),
+  }),
+  conversation: z.object({
+    maxRecentMessages: z.number().int().positive(),
+    maxParticipantsForProfileLoad: z.number().int().positive(),
+    notEngaged: z.object({
+      engageDebounceMs: tupleMsSchema,
+      directTriggerConfidence: z.number().min(0).max(1),
+      ambientEngagementEnabled: z.boolean(),
+      ambientMinSilenceMs: z.number().int().nonnegative(),
+      ambientConfidenceThreshold: z.number().min(0).max(1),
+      ambientMaxPerHour: z.number().int().nonnegative(),
+    }),
+    engaged: z.object({
+      replyDebounceMs: tupleMsSchema,
+      minSecondsBetweenBotReplies: z.number().int().nonnegative(),
+      minSecondsBetweenUnpromptedReplies: z.number().int().nonnegative(),
+      maxConsecutiveBotReplies: z.number().int().nonnegative(),
+      replyConfidenceThreshold: z.number().min(0).max(1),
+      silentStayConfidenceThreshold: z.number().min(0).max(1),
+      disengageAfterUnrelatedHumanMessages: z.number().int().nonnegative(),
+      disengageAfterIdleMs: z.number().int().nonnegative(),
+    }),
+    cooldownMs: tupleMsSchema,
+  }),
+  streaming: z.object({
+    enabled: z.boolean(),
+    initialPlaceholder: z.string(),
+    editIntervalMs: z.number().int().positive(),
+    softLimitChars: z.number().int().positive(),
+    hardLimitChars: z.number().int().positive(),
+  }),
+  memory: z.object({
+    compaction: z.object({
+      enabled: z.boolean(),
+      maxEventsBeforeCompaction: z.number().int().positive(),
+      minEventsPerSummary: z.number().int().positive(),
+    }),
+    dream: z.object({
+      enabled: z.boolean(),
+      intervalMinutes: z.number().int().positive(),
+      runOnConversationEnd: z.boolean(),
+      runOnCompaction: z.boolean(),
+      maxHistoryEntriesPerRun: z.number().int().positive(),
+      maxIterations: z.number().int().positive(),
+      allowEditSoul: z.boolean(),
+      allowEditGroup: z.boolean(),
+      allowEditUserProfiles: z.boolean(),
+    }),
+  }),
+  tools: z.object({
+    workspaceFiles: z.boolean(),
+    memory: z.boolean(),
+    summarize: z.boolean(),
+    weather: z.boolean(),
+    discordActions: z.boolean(),
+    fetchUrl: z.boolean(),
+    readAttachment: z.boolean(),
+    sandboxExec: z.boolean(),
+  }),
+  sandbox: z.object({
+    enabled: z.boolean(),
+    network: z.boolean(),
+    timeoutMs: z.number().int().positive(),
+    outputLimitBytes: z.number().int().positive(),
+  }),
+});
+
+export const defaultConfig: AppConfig = {
+  discord: {
+    tokenEnv: "DISCORD_BOT_TOKEN",
+    allowedGuildIds: [],
+    allowedChannelIds: [],
+    enableMentions: true,
+    enableReplies: true,
+    enableReactions: true,
+    enableMessageEditStreaming: true,
+  },
+  llm: {
+    provider: "openai-codex",
+    model: "gpt-5.5",
+    reasoning: "medium",
+    codex: {
+      authPath: "~/.discord-bot-become-human-2/codex-auth.json",
+      transport: "auto",
+    },
+  },
+  runtime: {
+    rootDir: "~/.discord-bot-become-human-2",
+    defaultLocale: "ko-KR",
+    timezone: "Asia/Seoul",
+  },
+  conversation: {
+    maxRecentMessages: 100,
+    maxParticipantsForProfileLoad: 16,
+    notEngaged: {
+      engageDebounceMs: [3000, 9000],
+      directTriggerConfidence: 1,
+      ambientEngagementEnabled: true,
+      ambientMinSilenceMs: 300000,
+      ambientConfidenceThreshold: 0.78,
+      ambientMaxPerHour: 2,
+    },
+    engaged: {
+      replyDebounceMs: [1500, 5000],
+      minSecondsBetweenBotReplies: 20,
+      minSecondsBetweenUnpromptedReplies: 90,
+      maxConsecutiveBotReplies: 1,
+      replyConfidenceThreshold: 0.7,
+      silentStayConfidenceThreshold: 0.55,
+      disengageAfterUnrelatedHumanMessages: 8,
+      disengageAfterIdleMs: 900000,
+    },
+    cooldownMs: [10000, 30000],
+  },
+  streaming: {
+    enabled: true,
+    initialPlaceholder: "생각 중...",
+    editIntervalMs: 1000,
+    softLimitChars: 1800,
+    hardLimitChars: 1950,
+  },
+  memory: {
+    compaction: {
+      enabled: true,
+      maxEventsBeforeCompaction: 120,
+      minEventsPerSummary: 20,
+    },
+    dream: {
+      enabled: true,
+      intervalMinutes: 120,
+      runOnConversationEnd: true,
+      runOnCompaction: true,
+      maxHistoryEntriesPerRun: 20,
+      maxIterations: 10,
+      allowEditSoul: false,
+      allowEditGroup: false,
+      allowEditUserProfiles: true,
+    },
+  },
+  tools: {
+    workspaceFiles: true,
+    memory: true,
+    summarize: true,
+    weather: true,
+    discordActions: true,
+    fetchUrl: true,
+    readAttachment: true,
+    sandboxExec: true,
+  },
+  sandbox: {
+    enabled: true,
+    network: false,
+    timeoutMs: 30000,
+    outputLimitBytes: 131072,
+  },
+};
+
+export async function loadOrCreateConfig(configPath: string): Promise<AppConfig> {
+  try {
+    const raw = await readFile(configPath, "utf8");
+    return parseConfig(JSON.parse(raw));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  await mkdir(dirname(configPath), { recursive: true });
+  await writeFile(configPath, `${JSON.stringify(defaultConfig, null, 2)}\n`, "utf8");
+  return defaultConfig;
+}
+
+export function parseConfig(value: unknown): AppConfig {
+  const parsed = configSchema.parse(value);
+  if (parsed.streaming.softLimitChars >= parsed.streaming.hardLimitChars) {
+    throw new Error("streaming.softLimitChars must be smaller than streaming.hardLimitChars");
+  }
+  return parsed;
+}

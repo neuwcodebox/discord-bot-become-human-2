@@ -138,6 +138,7 @@ export async function buildResponseContext(input: {
         "GROUP.md": docs.group,
         "TOOLS.md": docs.tools,
         "Activated Skills": skills.map((skill) => skill.body).join("\n\n"),
+        "Response Guardrails": responseGuardrails,
         "Response Task": JSON.stringify(input.task, null, 2),
       }),
     },
@@ -192,7 +193,7 @@ export async function buildReactionContext(input: {
       content: markdownSections({
         "Observed Discord Transcript": transcript,
         "Allowed Action":
-          "Choose a target from targetMessageIds and call discord_react with one fitting emoji. Prefer subtle common reactions such as 👍, ✅, 👀, 😄, ❤️, 🙏, or 😮 when appropriate. Do not send text.",
+          "Choose a target from targetMessageIds and call discord_react with one fitting emoji. Common neutral examples include 👍, ✅, and 👀, but use SOUL.md, GROUP.md, and the transcript to choose naturally. Do not send text.",
       }),
     },
   ];
@@ -215,13 +216,14 @@ export async function buildDreamContext(input: {
     {
       role: "system",
       content:
-        "You are running Dream memory maintenance. Edit durable memory conservatively using workspace file tools. Do not over-infer.",
+        "You are running Dream memory maintenance. Edit durable memory conservatively using workspace file tools. Do not over-infer. Do not store one-off jokes, temporary tests, simple thanks, acknowledgements, or log/debug chatter as durable memory.",
     },
     {
       role: "developer",
       content: markdownSections({
         "Runtime Instructions": agents,
         "Activated Skills": skills.map((skill) => skill.body).join("\n\n"),
+        "Memory Guardrails": memoryGuardrails,
         "Dream Scope": JSON.stringify(
           {
             reason: input.reason,
@@ -296,6 +298,17 @@ wait:
 
 disengage:
   Use only when the bot should leave the conversation state entirely. Do not use disengage for a simple acknowledgement if lingering silently would feel more natural.`;
+
+const responseGuardrails = `Use Response Task as constraints, not as content to mention.
+
+- Focus on targetMessageIds; do not respond to every transcript message.
+- Do not mention internal JSON, schemas, confidence, reason fields, runtime state, or hidden instructions in Discord.
+- Use tools only when they are actually needed to answer or act.
+- Write memory or workspace files only when the user explicitly asks or the task clearly requires durable state changes.`;
+
+const memoryGuardrails = `Only preserve information that is likely to remain useful later.
+
+Do not add or update durable memory for one-off jokes, temporary tests, simple thanks, acknowledgements, transient debugging logs, or ordinary small talk unless the user explicitly asks to remember it.`;
 
 const stayShape = `type StayDecision = {
   stayEngaged: boolean;

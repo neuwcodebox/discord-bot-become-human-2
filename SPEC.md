@@ -1333,6 +1333,8 @@ developer:
   - GROUP.md 전체
   - TOOLS.md 전체
   - selected SKILL.md 전체
+  - response guardrails: targetMessageIds 중심, 내부 JSON/schema 언급 금지, 필요한 경우에만 도구 사용,
+    명시적 필요 없이 memory/workspace file write 금지
   - current response task
 
 user:
@@ -1366,12 +1368,14 @@ Context 구성:
 system:
   - 장기 기억 관리 task
   - 보수적 편집 원칙
+  - 일회성 농담, 임시 테스트, 단순 감사/ack, transient debug/log chatter 저장 금지
   - Dream 실행 범위
 
 developer:
   - resources/AGENTS.md 전체
   - memory SKILL.md 전체
   - workspace-files SKILL.md 전체
+  - memory guardrails
   - Dream edit scope
   - maxIterations
 

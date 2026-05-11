@@ -1,8 +1,10 @@
 import type { Message } from "discord.js";
 import { buildResponseContext } from "../agent/context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
+import { AttachmentCache } from "../discord/attachment-cache.js";
 import { DiscordStreamingWriter } from "../discord/streaming-writer.js";
 import { EventLog } from "../memory/event-log.js";
+import { createDiscordActionRuntimeFromMessage } from "../tools/discord-actions.js";
 import { createToolRegistry } from "../tools/tool-registry.js";
 import type {
   AppConfig,
@@ -17,6 +19,7 @@ import { decideStay, forcedSilentStay } from "./stay-decision.js";
 
 export class ConversationOrchestrator {
   private readonly states = new ConversationStateStore();
+  private readonly attachmentCache = new AttachmentCache();
 
   constructor(
     private readonly config: AppConfig,
@@ -31,11 +34,13 @@ export class ConversationOrchestrator {
     discordMessage?: Message<boolean>,
   ): Promise<void> {
     const message = event.payload;
+    this.attachmentCache.remember(message);
     const id = conversationId(message);
     const state = this.states.get(id);
     if (message.author.isBot) return;
 
     const relatedToBot = this.isStrongTrigger(message);
+    const previousLastHumanAt = state.lastHumanMessageAt;
     noteHumanMessage(state, relatedToBot);
     const events = await new EventLog(workspace.workspaceRoot).readRecent(
       this.config.conversation.maxRecentMessages,
@@ -44,7 +49,7 @@ export class ConversationOrchestrator {
     if (state.engagement === "not_engaged") {
       const decision = relatedToBot
         ? directEngagementDecision(message, "direct trigger")
-        : await this.maybeAmbientEngage(workspace.workspaceRoot, state, events, message);
+        : await this.maybeAmbientEngage(workspace.workspaceRoot, state, events, message, previousLastHumanAt);
       if (!decision?.engage) return;
       state.engagement = "engaged";
       state.engagedSince = new Date().toISOString();
@@ -89,10 +94,11 @@ export class ConversationOrchestrator {
     state: ReturnType<ConversationStateStore["get"]>,
     events: NormalizedDiscordEvent[],
     message: NormalizedDiscordMessage,
+    previousLastHumanAt?: string,
   ) {
     if (!this.config.conversation.notEngaged.ambientEngagementEnabled) return undefined;
     const now = Date.now();
-    const lastHumanAt = state.lastHumanMessageAt ? Date.parse(state.lastHumanMessageAt) : 0;
+    const lastHumanAt = previousLastHumanAt ? Date.parse(previousLastHumanAt) : 0;
     if (lastHumanAt && now - lastHumanAt < this.config.conversation.notEngaged.ambientMinSilenceMs)
       return undefined;
     state.ambientReplyTimes = state.ambientReplyTimes.filter(
@@ -136,7 +142,10 @@ export class ConversationOrchestrator {
       channelId: discordMessage.channelId,
       actorUserId: discordMessage.author.id,
     };
-    const tools = createToolRegistry(this.config, toolContext);
+    const tools = createToolRegistry(this.config, toolContext, {
+      attachmentCache: this.attachmentCache,
+      discordActions: createDiscordActionRuntimeFromMessage(discordMessage, toolContext),
+    });
     if (this.config.streaming.enabled && this.config.discord.enableMessageEditStreaming) {
       const writer = new DiscordStreamingWriter(discordMessage.channel, this.config, discordMessage);
       await writer.start();

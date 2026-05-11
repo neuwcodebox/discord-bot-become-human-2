@@ -13,7 +13,8 @@
 - [x] pi Codex agent runner wrapper와 workspace/memory/summarize/weather/fetch/sandbox 도구 골격 구현
 - [x] conversation state, strong trigger, hard gate, cooldown, streaming writer 골격 구현
 - [x] `npm run check`, `npm run lint`, `npm test`, `npm run build` 통과
-- [ ] Discord action tools를 agent tool registry에 완전 연결
+- [x] Discord action tools를 agent tool registry에 연결
+- [x] attachment reader를 agent tool registry에 연결
 - [ ] attachment image content block/provider 연동 고도화
 - [ ] Dream memory가 실제 파일 편집 결과를 audit/검증하도록 강화
 - [ ] Discord 실제 샌드박스/실서버 통합 검증

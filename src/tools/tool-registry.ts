@@ -1,6 +1,9 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
+import type { AttachmentCache } from "../discord/attachment-cache.js";
 import type { AppConfig, ToolContext } from "../types.js";
+import { readAttachment } from "./attachment.js";
+import type { DiscordActionRuntime } from "./discord-actions.js";
 import { fetchUrl } from "./fetch-url.js";
 import { memoryPropose, memoryRead } from "./memory.js";
 import { sandboxExec } from "./sandbox-exec.js";
@@ -8,7 +11,11 @@ import { summarizeText } from "./summarize.js";
 import { weatherLookup } from "./weather.js";
 import { workspaceRead, workspaceSearch, workspaceWrite } from "./workspace-files.js";
 
-export function createToolRegistry(config: AppConfig, context: ToolContext): AgentTool<any>[] {
+export function createToolRegistry(
+  config: AppConfig,
+  context: ToolContext,
+  integrations: { discordActions?: DiscordActionRuntime; attachmentCache?: AttachmentCache } = {},
+): AgentTool<any>[] {
   const tools: AgentTool<any>[] = [];
   if (config.tools.workspaceFiles) {
     tools.push({
@@ -110,6 +117,93 @@ export function createToolRegistry(config: AppConfig, context: ToolContext): Age
       execute: async (_toolCallId, params) => {
         const args = params as { url: string };
         return jsonResult(await fetchUrl({ url: args.url }));
+      },
+    });
+  }
+  if (config.tools.readAttachment && integrations.attachmentCache) {
+    const attachmentCache = integrations.attachmentCache;
+    tools.push({
+      name: "read_attachment",
+      label: "Read Attachment",
+      description: "Read an attachment through its attachment:// reference.",
+      parameters: Type.Object({ ref: Type.String(), maxBytes: Type.Optional(Type.Number()) }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { ref: string; maxBytes?: number };
+        return jsonResult(await readAttachment(attachmentCache, args));
+      },
+    });
+  }
+  if (config.tools.discordActions && integrations.discordActions) {
+    const discordActions = integrations.discordActions;
+    tools.push({
+      name: "discord_react",
+      label: "React",
+      description: "Add an emoji reaction to a message.",
+      parameters: Type.Object({ messageId: Type.String(), emoji: Type.String() }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { messageId: string; emoji: string };
+        await discordActions.react(args.messageId, args.emoji);
+        return jsonResult({ ok: true });
+      },
+    });
+    tools.push({
+      name: "discord_unreact",
+      label: "Unreact",
+      description: "Remove this bot's emoji reaction from a message.",
+      parameters: Type.Object({ messageId: Type.String(), emoji: Type.String() }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { messageId: string; emoji: string };
+        await discordActions.unreact(args.messageId, args.emoji);
+        return jsonResult({ ok: true });
+      },
+    });
+    tools.push({
+      name: "discord_edit_own",
+      label: "Edit Own Message",
+      description: "Edit a bot-owned Discord message only.",
+      parameters: Type.Object({ messageId: Type.String(), content: Type.String() }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { messageId: string; content: string };
+        await discordActions.editOwn(args.messageId, args.content);
+        return jsonResult({ ok: true });
+      },
+    });
+    tools.push({
+      name: "discord_delete_own",
+      label: "Delete Own Message",
+      description: "Delete a bot-owned Discord message only.",
+      parameters: Type.Object({ messageId: Type.String() }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { messageId: string };
+        await discordActions.deleteOwn(args.messageId);
+        return jsonResult({ ok: true });
+      },
+    });
+    tools.push({
+      name: "discord_get_member",
+      label: "Get Guild Member",
+      description: "Read public guild member metadata.",
+      parameters: Type.Object({ userId: Type.String() }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { userId: string };
+        return jsonResult(await discordActions.getMember(args.userId));
+      },
+    });
+    tools.push({
+      name: "discord_get_channel",
+      label: "Get Channel",
+      description: "Read current channel metadata.",
+      parameters: Type.Object({}),
+      execute: async () => jsonResult(await discordActions.getChannel()),
+    });
+    tools.push({
+      name: "discord_search_history",
+      label: "Search Discord History",
+      description: "Search this guild workspace's events.jsonl and history.jsonl.",
+      parameters: Type.Object({ query: Type.String(), maxResults: Type.Optional(Type.Number()) }),
+      execute: async (_toolCallId, params) => {
+        const args = params as { query: string; maxResults?: number };
+        return jsonResult(await discordActions.searchHistory(args.query, args.maxResults));
       },
     });
   }

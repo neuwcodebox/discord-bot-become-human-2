@@ -3,11 +3,14 @@ import { join } from "node:path";
 import { buildDreamContext } from "../agent/context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
 import { appendJsonl, readCursor, readJsonl, writeCursor } from "../storage/jsonl.js";
+import { createToolRegistry } from "../tools/tool-registry.js";
 import type { AgentRunResult, AppConfig, HistoryEntry, MemoryInboxEntry } from "../types.js";
 
 export class DreamRunner {
   constructor(
     private readonly workspaceRoot: string,
+    private readonly agentsPath: string,
+    private readonly guildId: string,
     private readonly config: AppConfig,
     private readonly agentRunner: AgentRunner,
   ) {}
@@ -26,6 +29,7 @@ export class DreamRunner {
 
     const memory = await readTextIfExists(join(this.workspaceRoot, "memory", "MEMORY.md"));
     const context = await buildDreamContext({
+      agentsPath: this.agentsPath,
       workspaceRoot: this.workspaceRoot,
       history,
       inbox,
@@ -33,9 +37,14 @@ export class DreamRunner {
       config: this.config,
       reason,
     });
+    const tools = createToolRegistry(this.config, {
+      guildId: this.guildId,
+      workspaceRoot: this.workspaceRoot,
+    });
     const result = await this.agentRunner.run({
-      sessionId: `dream:${this.workspaceRoot}`,
+      sessionId: `dream:${this.guildId}`,
       messages: context,
+      tools,
     });
     const maxCursor = history.at(-1)?.cursor ?? cursor;
     await writeCursor(dreamCursorPath, maxCursor);

@@ -13,9 +13,8 @@ export class MemoryCompactor {
     const eventsPath = join(this.workspaceRoot, "memory", "events.jsonl");
     const historyPath = join(this.workspaceRoot, "memory", "history.jsonl");
     const cursorPath = join(this.workspaceRoot, "memory", ".cursor");
-    const historyCursorPath = join(this.workspaceRoot, "memory", ".history_cursor");
     const all = await readJsonl<NormalizedDiscordEvent>(eventsPath);
-    const lastCompacted = await readCursor(historyCursorPath);
+    const lastCompacted = await readCursor(cursorPath);
     const pending = all.filter((event) => (event.cursor ?? 0) > lastCompacted);
 
     if (pending.length < this.config.memory.compaction.maxEventsBeforeCompaction) return undefined;
@@ -41,8 +40,7 @@ export class MemoryCompactor {
       memoryTargets: ["memory/MEMORY.md", ...participants.map((id) => `users/${id}/USER.md`)],
     };
     await appendJsonl(historyPath, entry);
-    await writeCursor(historyCursorPath, entry.toEventCursor);
-    await writeCursor(cursorPath, Math.max(await readCursor(cursorPath), entry.toEventCursor));
+    await writeCursor(cursorPath, entry.toEventCursor);
     return entry;
   }
 }

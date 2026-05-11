@@ -3,6 +3,8 @@ import { buildResponseContext } from "../agent/context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
 import { AttachmentCache } from "../discord/attachment-cache.js";
 import { DiscordStreamingWriter } from "../discord/streaming-writer.js";
+import { MemoryCompactor } from "../memory/compactor.js";
+import { DreamScheduler } from "../memory/dream-scheduler.js";
 import { EventLog } from "../memory/event-log.js";
 import { createDiscordActionRuntimeFromMessage } from "../tools/discord-actions.js";
 import { createToolRegistry } from "../tools/tool-registry.js";
@@ -20,13 +22,16 @@ import { decideStay, forcedSilentStay } from "./stay-decision.js";
 export class ConversationOrchestrator {
   private readonly states = new ConversationStateStore();
   private readonly attachmentCache = new AttachmentCache();
+  private readonly dreamScheduler: DreamScheduler;
 
   constructor(
     private readonly config: AppConfig,
     private readonly agentsPath: string,
     private readonly runner: AgentRunner,
     private readonly botIdentity: { userId?: string; names: string[] } = { names: [] },
-  ) {}
+  ) {
+    this.dreamScheduler = new DreamScheduler(config, agentsPath, runner);
+  }
 
   async onMessage(
     event: Extract<NormalizedDiscordEvent, { type: "message_create" }>,
@@ -42,6 +47,11 @@ export class ConversationOrchestrator {
     const relatedToBot = this.isStrongTrigger(message);
     const previousLastHumanAt = state.lastHumanMessageAt;
     noteHumanMessage(state, relatedToBot);
+    this.dreamScheduler.startForGuild(workspace);
+    const compacted = await new MemoryCompactor(workspace.workspaceRoot, this.config).compactIfNeeded();
+    if (compacted && this.config.memory.dream.runOnCompaction) {
+      await this.dreamScheduler.runNow(workspace, "compaction");
+    }
     const events = await new EventLog(workspace.workspaceRoot).readRecent(
       this.config.conversation.maxRecentMessages,
     );

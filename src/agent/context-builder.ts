@@ -154,6 +154,7 @@ export async function buildResponseContext(input: {
 }
 
 export async function buildDreamContext(input: {
+  agentsPath: string;
   workspaceRoot: string;
   history: HistoryEntry[];
   inbox: MemoryInboxEntry[];
@@ -161,7 +162,10 @@ export async function buildDreamContext(input: {
   config: AppConfig;
   reason: string;
 }): Promise<AgentContextMessage[]> {
-  const skills = await new SkillLoader(input.workspaceRoot).load(["memory", "workspace-files"]);
+  const [agents, skills] = await Promise.all([
+    readFile(input.agentsPath, "utf8"),
+    new SkillLoader(input.workspaceRoot).load(["memory", "workspace-files"]),
+  ]);
   return [
     {
       role: "system",
@@ -171,6 +175,7 @@ export async function buildDreamContext(input: {
     {
       role: "developer",
       content: markdownSections({
+        "Runtime Instructions": agents,
         "Activated Skills": skills.map((skill) => skill.body).join("\n\n"),
         "Dream Scope": JSON.stringify(
           {

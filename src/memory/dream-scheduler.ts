@@ -1,0 +1,41 @@
+import type { AgentRunner } from "../agent/runner.js";
+import type { AppConfig, GuildWorkspace } from "../types.js";
+import { DreamRunner } from "./dream-runner.js";
+
+export class DreamScheduler {
+  private readonly timers = new Map<string, NodeJS.Timeout>();
+
+  constructor(
+    private readonly config: AppConfig,
+    private readonly agentsPath: string,
+    private readonly runner: AgentRunner,
+  ) {}
+
+  startForGuild(workspace: GuildWorkspace): void {
+    if (!this.config.memory.dream.enabled) return;
+    if (this.timers.has(workspace.guildId)) return;
+    const intervalMs = this.config.memory.dream.intervalMinutes * 60 * 1000;
+    const timer = setInterval(() => {
+      void this.runNow(workspace, "interval").catch((error) => {
+        console.error("Dream run failed", error);
+      });
+    }, intervalMs);
+    timer.unref();
+    this.timers.set(workspace.guildId, timer);
+  }
+
+  async runNow(workspace: GuildWorkspace, reason: string): Promise<void> {
+    await new DreamRunner(
+      workspace.workspaceRoot,
+      this.agentsPath,
+      workspace.guildId,
+      this.config,
+      this.runner,
+    ).run(reason);
+  }
+
+  stopAll(): void {
+    for (const timer of this.timers.values()) clearInterval(timer);
+    this.timers.clear();
+  }
+}

@@ -27,7 +27,37 @@ describe("codex auth loading", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to pi-ai auth.json in the current working directory", async () => {
+  it("loads and refreshes pi-ai OAuth credentials from the configured codex auth path", async () => {
+    const temp = await mkdtemp(join(tmpdir(), "dbh2-auth-"));
+    process.chdir(temp);
+    const authPath = join(temp, "codex-auth.json");
+    await writeFile(
+      authPath,
+      JSON.stringify({
+        "openai-codex": {
+          type: "oauth",
+          access: "old-access",
+          refresh: "refresh-token",
+          expires: 1,
+        },
+      }),
+      "utf8",
+    );
+    const { loadCodexCredentials } = await import("../src/agent/provider.js");
+
+    const credentials = await loadCodexCredentials({
+      ...defaultConfig,
+      llm: {
+        ...defaultConfig.llm,
+        codex: { ...defaultConfig.llm.codex, authPath },
+      },
+    });
+
+    expect(credentials.apiKey).toBe("access-token");
+    await expect(readFile(authPath, "utf8")).resolves.toContain("access-token");
+  });
+
+  it("does not read pi-ai auth.json from the current working directory", async () => {
     const temp = await mkdtemp(join(tmpdir(), "dbh2-auth-"));
     process.chdir(temp);
     await writeFile(
@@ -44,9 +74,14 @@ describe("codex auth loading", () => {
     );
     const { loadCodexCredentials } = await import("../src/agent/provider.js");
 
-    const credentials = await loadCodexCredentials(defaultConfig);
+    const credentials = await loadCodexCredentials({
+      ...defaultConfig,
+      llm: {
+        ...defaultConfig.llm,
+        codex: { ...defaultConfig.llm.codex, authPath: join(temp, "missing-codex-auth.json") },
+      },
+    });
 
-    expect(credentials.apiKey).toBe("access-token");
-    await expect(readFile(join(temp, "auth.json"), "utf8")).resolves.toContain("access-token");
+    expect(credentials.apiKey).toBeUndefined();
   });
 });

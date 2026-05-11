@@ -210,7 +210,7 @@ project/
 ```txt
 1. ~/.discord-bot-become-human-2 디렉터리 생성
 2. config.json이 없으면 기본 config skeleton 생성
-3. codex-auth.json이 없으면 Codex login 안내 또는 login command 실행 경로 제공
+3. codex-auth.json이 없으면 `npm run login:codex` 실행 안내 제공
 4. Discord guild별 workspace가 없으면 templates/workspace를 복사
 5. users/, memory/, skills/ 하위 기본 파일이 누락되었으면 보수적으로 생성
 ```
@@ -317,7 +317,7 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
 
 `allowedGuildIds`와 `allowedChannelIds`가 비어 있으면 봇이 접근 가능한 guild/channel에서 동작한다. 실제 운영에서 제한하려면 배열에 ID를 넣는다.
 
-Discord token은 `config.json`에 직접 저장하지 않고 `discord.tokenEnv`가 가리키는 환경변수에서 읽는다. Codex auth는 `llm.codex.authPath`에서 읽는다.
+Discord token은 `config.json`에 직접 저장하지 않고 `discord.tokenEnv`가 가리키는 환경변수에서 읽는다. Codex auth는 `llm.codex.authPath`에서 읽는다. Codex 로그인은 프로젝트 루트에서 `npm run login:codex`로 수행하며, 이 스크립트는 `@earendil-works/pi-ai/oauth`의 `loginOpenAICodex()`를 호출하고 반환된 OAuth credential을 `llm.codex.authPath`에 저장한다. 현재 작업 디렉터리의 `auth.json`은 읽지 않는다.
 
 ---
 
@@ -1619,6 +1619,14 @@ authPath: ~/.discord-bot-become-human-2/codex-auth.json
 
 Codex auth는 `@earendil-works/pi-ai`의 OAuth 관련 API를 사용한다. `codex-auth.json`은 agent context, file tool, bwrap sandbox에 노출하지 않는다.
 
+로그인 커맨드:
+
+```bash
+npm run login:codex
+```
+
+이 커맨드는 pi-ai CLI의 `auth.json` 저장 방식을 사용하지 않고, pi-ai OAuth 라이브러리를 직접 호출해서 `authPath`에 저장한다.
+
 ### 21.2 agent runner
 
 `agent/runner.ts`는 pi agent harness를 감싼다.
@@ -1834,7 +1842,7 @@ src/
 
 Build a Node.js/TypeScript Discord group-chat AI agent bot using `discord.js`, the pi agent harness, and the OpenAI Codex provider. Default LLM is `openai-codex` with model `gpt-5.5`.
 
-Runtime root is `~/.discord-bot-become-human-2`. Store `config.json` and `codex-auth.json` directly under that root. Store each Discord guild workspace under `~/.discord-bot-become-human-2/guilds/<guild_id>/workspace`.
+Runtime root is `~/.discord-bot-become-human-2`. Store `config.json` and `codex-auth.json` directly under that root. Store each Discord guild workspace under `~/.discord-bot-become-human-2/guilds/<guild_id>/workspace`. Run Codex OAuth login with `npm run login:codex`; it calls the pi-ai OAuth library and writes credentials to `llm.codex.authPath`, not to `./auth.json`.
 
 `resources/AGENTS.md` is a source-code runtime instruction file. Do not copy it into guild workspaces. Runtime injects it into contexts as read-only common instructions. Agent tools cannot access it as a file.
 

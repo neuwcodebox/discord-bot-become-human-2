@@ -19,7 +19,7 @@ export class PiCodexAgentRunner implements AgentRunner {
     const credentials = await loadCodexCredentials(this.config);
     if (!credentials.apiKey) {
       throw new Error(
-        `Codex auth is not available at ${this.config.llm.codex.authPath}. Run Codex login before starting agent responses.`,
+        `Codex auth is not available at ${this.config.llm.codex.authPath}. Run: npm run login:codex`,
       );
     }
 

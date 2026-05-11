@@ -14,7 +14,9 @@ export async function main(): Promise<void> {
   const config = await loadOrCreateConfig(paths.configPath);
   const runtime = await ensureRuntimeRoot(paths);
   if (!runtime.codexAuthExists) {
-    console.warn(`Codex auth file not found at ${paths.codexAuthPath}. Agent responses require Codex login.`);
+    console.warn(
+      `Codex auth file not found at ${paths.codexAuthPath}. Run: npx @earendil-works/pi-ai login openai-codex`,
+    );
   }
 
   const client = createDiscordClient(config);

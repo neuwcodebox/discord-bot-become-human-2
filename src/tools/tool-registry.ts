@@ -1,6 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { type TSchema, Type } from "@earendil-works/pi-ai";
 import type { AttachmentCache } from "../discord/attachment-cache.js";
+import { childLogger } from "../logger.js";
 import type { AppConfig, RuntimeAgentTool, ToolContext } from "../types.js";
 import { readAttachmentToolContent } from "./attachment.js";
 import type { DiscordActionRuntime } from "./discord-actions.js";
@@ -10,6 +11,8 @@ import { sandboxExec } from "./sandbox-exec.js";
 import { summarizeText } from "./summarize.js";
 import { weatherLookup } from "./weather.js";
 import { workspaceRead, workspaceSearch, workspaceWrite } from "./workspace-files.js";
+
+const log = childLogger("tools");
 
 export function createToolRegistry(
   config: AppConfig,
@@ -211,7 +214,46 @@ function addTool<TParameters extends TSchema, TDetails>(
   tools: RuntimeAgentTool[],
   tool: AgentTool<TParameters, TDetails>,
 ): void {
-  tools.push(tool as unknown as RuntimeAgentTool);
+  tools.push(wrapToolLogging(tool) as unknown as RuntimeAgentTool);
+}
+
+function wrapToolLogging<TParameters extends TSchema, TDetails>(
+  tool: AgentTool<TParameters, TDetails>,
+): AgentTool<TParameters, TDetails> {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const startedAt = Date.now();
+      log.debug(
+        { toolName: tool.name, toolCallId, paramKeys: Object.keys(params) },
+        "tool execution started",
+      );
+      try {
+        const result = await tool.execute(toolCallId, params, signal, onUpdate);
+        log.debug(
+          {
+            toolName: tool.name,
+            toolCallId,
+            durationMs: Date.now() - startedAt,
+            isError: false,
+          },
+          "tool execution completed",
+        );
+        return result;
+      } catch (error) {
+        log.warn(
+          {
+            err: error,
+            toolName: tool.name,
+            toolCallId,
+            durationMs: Date.now() - startedAt,
+          },
+          "tool execution failed",
+        );
+        throw error;
+      }
+    },
+  };
 }
 
 function textResult(text: string) {

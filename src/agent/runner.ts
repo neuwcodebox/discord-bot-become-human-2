@@ -1,8 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { getModels, registerBuiltInApiProviders } from "@earendil-works/pi-ai";
+import { childLogger } from "../logger.js";
 import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
 import { loadCodexCredentials } from "./provider.js";
+
+const log = childLogger("agent-runner");
 
 export interface AgentRunner {
   run(request: AgentRunRequest): Promise<AgentRunResult>;
@@ -14,6 +17,7 @@ export class PiCodexAgentRunner implements AgentRunner {
   }
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    const startedAt = Date.now();
     const model = resolveModel(this.config);
     const credentials = await loadCodexCredentials(this.config);
     if (!credentials.apiKey) {
@@ -45,6 +49,17 @@ export class PiCodexAgentRunner implements AgentRunner {
       getApiKey: async () => credentials.apiKey,
       transport: this.config.llm.codex.transport === "websocket" ? "websocket" : "auto",
     });
+    log.info(
+      {
+        sessionId: request.sessionId,
+        model: model.id,
+        reasoning: this.config.llm.reasoning,
+        messageCount: request.messages.length,
+        toolCount: request.tools?.length ?? 0,
+        streaming: Boolean(request.onTextDelta),
+      },
+      "agent run started",
+    );
 
     let finalText = "";
     agent.subscribe(async (event) => {
@@ -59,6 +74,15 @@ export class PiCodexAgentRunner implements AgentRunner {
 
     await agent.prompt(prompts);
     await agent.waitForIdle();
+    log.info(
+      {
+        sessionId: request.sessionId,
+        durationMs: Date.now() - startedAt,
+        outputLength: finalText.length,
+        transcriptMessageCount: agent.state.messages.length,
+      },
+      "agent run completed",
+    );
     return {
       text: finalText,
       messages: agent.state.messages,

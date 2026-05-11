@@ -3,6 +3,7 @@ import { buildResponseContext } from "../agent/context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
 import { AttachmentCache } from "../discord/attachment-cache.js";
 import { DiscordStreamingWriter } from "../discord/streaming-writer.js";
+import { childLogger } from "../logger.js";
 import { MemoryCompactor } from "../memory/compactor.js";
 import { DreamScheduler } from "../memory/dream-scheduler.js";
 import { EventLog } from "../memory/event-log.js";
@@ -19,6 +20,8 @@ import { decideEngagement, directEngagementDecision } from "./engagement-decisio
 import { checkReplyHardGates, isDirectedAtBot, noteBotReply, noteHumanMessage } from "./reply-cadence.js";
 import { ConversationStateStore, conversationId } from "./state-store.js";
 import { decideStay, forcedSilentStay } from "./stay-decision.js";
+
+const log = childLogger("conversation");
 
 export class ConversationOrchestrator {
   private readonly states = new ConversationStateStore();
@@ -43,14 +46,32 @@ export class ConversationOrchestrator {
     this.attachmentCache.remember(message);
     const id = conversationId(message);
     const state = this.states.get(id);
-    if (message.author.isBot) return;
+    if (message.author.isBot) {
+      log.debug(
+        { guildId: event.guildId, channelId: event.channelId, messageId: event.messageId },
+        "bot-authored message ignored",
+      );
+      return;
+    }
 
     const relatedToBot = this.isStrongTrigger(message);
     const previousLastHumanAt = state.lastHumanMessageAt;
     noteHumanMessage(state, relatedToBot);
+    log.debug(
+      {
+        guildId: event.guildId,
+        channelId: event.channelId,
+        messageId: event.messageId,
+        conversationId: id,
+        engagement: state.engagement,
+        relatedToBot,
+      },
+      "conversation message received",
+    );
     this.dreamScheduler.startForGuild(workspace);
     const compacted = await new MemoryCompactor(workspace.workspaceRoot, this.config).compactIfNeeded();
     if (compacted && this.config.memory.dream.runOnCompaction) {
+      log.info({ guildId: workspace.guildId, reason: "compaction" }, "dream run triggered");
       await this.dreamScheduler.runNow(workspace, "compaction");
     }
     const events = await new EventLog(workspace.workspaceRoot).readRecent(
@@ -61,10 +82,26 @@ export class ConversationOrchestrator {
       const decision = relatedToBot
         ? directEngagementDecision(message, "direct trigger")
         : await this.maybeAmbientEngage(workspace.workspaceRoot, state, events, message, previousLastHumanAt);
-      if (!decision?.engage) return;
+      if (!decision?.engage) {
+        log.debug(
+          { guildId: workspace.guildId, channelId: event.channelId, messageId: event.messageId },
+          "message did not engage bot",
+        );
+        return;
+      }
       state.engagement = "engaged";
       state.engagedSince = new Date().toISOString();
       state.lastEngagementChangedAt = state.engagedSince;
+      log.info(
+        {
+          guildId: workspace.guildId,
+          channelId: event.channelId,
+          messageId: event.messageId,
+          confidence: decision.confidence,
+          expectedRole: decision.expectedRole,
+        },
+        "conversation engaged",
+      );
       await delay(randomDebounceMs(this.config.conversation.notEngaged.engageDebounceMs));
       await this.reply(decision, events, workspace, discordMessage);
       return;
@@ -73,6 +110,10 @@ export class ConversationOrchestrator {
     if (shouldIdleDisengage(this.config, state)) {
       state.engagement = "not_engaged";
       state.lastEngagementChangedAt = new Date().toISOString();
+      log.info(
+        { guildId: workspace.guildId, channelId: event.channelId, messageId: event.messageId },
+        "conversation disengaged by idle/unrelated gate",
+      );
       return;
     }
 
@@ -91,13 +132,35 @@ export class ConversationOrchestrator {
     if (!stay.stayEngaged || stay.action === "disengage") {
       state.engagement = "not_engaged";
       state.lastEngagementChangedAt = new Date().toISOString();
+      log.info(
+        {
+          guildId: workspace.guildId,
+          channelId: event.channelId,
+          messageId: event.messageId,
+          action: stay.action,
+          reason: stay.reason,
+          confidence: stay.confidence,
+        },
+        "conversation disengaged by stay decision",
+      );
       return;
     }
     if (
       stay.action !== "reply" ||
       stay.confidence < this.config.conversation.engaged.replyConfidenceThreshold
-    )
+    ) {
+      log.debug(
+        {
+          guildId: workspace.guildId,
+          channelId: event.channelId,
+          messageId: event.messageId,
+          action: stay.action,
+          confidence: stay.confidence,
+        },
+        "engaged conversation stayed silent",
+      );
       return;
+    }
     await delay(randomDebounceMs(this.config.conversation.engaged.replyDebounceMs));
     await this.reply(stay, events, workspace, discordMessage);
   }
@@ -109,16 +172,23 @@ export class ConversationOrchestrator {
     message: NormalizedDiscordMessage,
     previousLastHumanAt?: string,
   ) {
-    if (!this.config.conversation.notEngaged.ambientEngagementEnabled) return undefined;
+    if (!this.config.conversation.notEngaged.ambientEngagementEnabled) {
+      log.debug({ messageId: message.id }, "ambient engagement disabled");
+      return undefined;
+    }
     const now = Date.now();
     const lastHumanAt = previousLastHumanAt ? Date.parse(previousLastHumanAt) : 0;
-    if (lastHumanAt && now - lastHumanAt < this.config.conversation.notEngaged.ambientMinSilenceMs)
+    if (lastHumanAt && now - lastHumanAt < this.config.conversation.notEngaged.ambientMinSilenceMs) {
+      log.debug({ messageId: message.id }, "ambient engagement skipped by silence window");
       return undefined;
+    }
     state.ambientReplyTimes = state.ambientReplyTimes.filter(
       (time) => now - Date.parse(time) < 60 * 60 * 1000,
     );
-    if (state.ambientReplyTimes.length >= this.config.conversation.notEngaged.ambientMaxPerHour)
+    if (state.ambientReplyTimes.length >= this.config.conversation.notEngaged.ambientMaxPerHour) {
+      log.debug({ messageId: message.id }, "ambient engagement skipped by hourly limit");
       return undefined;
+    }
     const decision = await decideEngagement({
       runner: this.runner,
       agentsPath: this.agentsPath,
@@ -127,8 +197,13 @@ export class ConversationOrchestrator {
       events,
       currentMessage: message,
     });
-    if (decision.confidence < this.config.conversation.notEngaged.ambientConfidenceThreshold)
+    if (decision.confidence < this.config.conversation.notEngaged.ambientConfidenceThreshold) {
+      log.debug(
+        { messageId: message.id, confidence: decision.confidence },
+        "ambient engagement below confidence threshold",
+      );
       return undefined;
+    }
     state.ambientReplyTimes.push(new Date().toISOString());
     return decision;
   }
@@ -139,8 +214,21 @@ export class ConversationOrchestrator {
     workspace: GuildWorkspace,
     discordMessage?: Message<boolean>,
   ): Promise<void> {
-    if (!discordMessage) return;
+    if (!discordMessage) {
+      log.warn({ guildId: workspace.guildId }, "reply skipped because discord message is unavailable");
+      return;
+    }
+    const startedAt = Date.now();
     const state = this.states.get(conversationId(taskMessageKey(events)));
+    log.info(
+      {
+        guildId: workspace.guildId,
+        channelId: discordMessage.channelId,
+        targetMessageIds: task.targetMessageIds,
+        action: "reply",
+      },
+      "agent reply started",
+    );
     const context = await buildResponseContext({
       agentsPath: this.agentsPath,
       workspaceRoot: workspace.workspaceRoot,
@@ -170,6 +258,17 @@ export class ConversationOrchestrator {
       });
       const sent = await writer.finish(result.text);
       if (sent) noteBotReply(this.config, state, sent.id);
+      log.info(
+        {
+          guildId: workspace.guildId,
+          channelId: discordMessage.channelId,
+          messageId: sent?.id,
+          streaming: true,
+          durationMs: Date.now() - startedAt,
+          outputLength: result.text.length,
+        },
+        "agent reply completed",
+      );
     } else {
       const result = await this.runner.run({
         sessionId: `discord:${workspace.guildId}:${discordMessage.channelId}`,
@@ -181,6 +280,17 @@ export class ConversationOrchestrator {
         allowedMentions: { parse: [], repliedUser: false },
       });
       noteBotReply(this.config, state, sent.id);
+      log.info(
+        {
+          guildId: workspace.guildId,
+          channelId: discordMessage.channelId,
+          messageId: sent.id,
+          streaming: false,
+          durationMs: Date.now() - startedAt,
+          outputLength: result.text.length,
+        },
+        "agent reply completed",
+      );
     }
   }
 

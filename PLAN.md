@@ -18,7 +18,7 @@
 - [x] `.cursor` compaction cursor와 event cursor 분리
 - [x] Dream runner에 `resources/AGENTS.md`와 workspace tools 주입
 - [x] Dream scheduler interval/compaction trigger 골격 구현
-- [ ] attachment image content block/provider 연동 고도화
+- [x] attachment image content block 반환 구현
 - [ ] Dream memory가 실제 파일 편집 결과를 audit/검증하도록 강화
 - [ ] Discord 실제 샌드박스/실서버 통합 검증
 - [ ] SPEC 전체 완료 감사

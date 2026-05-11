@@ -2,7 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import type { AttachmentCache } from "../discord/attachment-cache.js";
 import type { AppConfig, ToolContext } from "../types.js";
-import { readAttachment } from "./attachment.js";
+import { readAttachmentToolContent } from "./attachment.js";
 import type { DiscordActionRuntime } from "./discord-actions.js";
 import { fetchUrl } from "./fetch-url.js";
 import { memoryPropose, memoryRead } from "./memory.js";
@@ -129,7 +129,7 @@ export function createToolRegistry(
       parameters: Type.Object({ ref: Type.String(), maxBytes: Type.Optional(Type.Number()) }),
       execute: async (_toolCallId, params) => {
         const args = params as { ref: string; maxBytes?: number };
-        return jsonResult(await readAttachment(attachmentCache, args));
+        return readAttachmentToolContent(attachmentCache, args);
       },
     });
   }

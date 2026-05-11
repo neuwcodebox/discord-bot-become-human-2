@@ -19,6 +19,9 @@ export async function normalizeMessage(
   const member = "member" in message ? message.member : undefined;
   const displayName = member?.displayName ?? message.author.globalName ?? message.author.username;
   const threadId = message.channel.isThread() ? message.channel.id : undefined;
+  const channelId = message.channel.isThread()
+    ? (message.channel.parentId ?? message.channelId)
+    : message.channelId;
   const reference = await resolveReply(message);
   const cleanContent =
     ("cleanContent" in message ? message.cleanContent : (message as { content?: string }).content) ?? "";
@@ -26,7 +29,7 @@ export async function normalizeMessage(
   return {
     id: message.id,
     guildId: message.guildId,
-    channelId: message.channelId,
+    channelId,
     ...(threadId ? { threadId } : {}),
     author: {
       id: message.author.id,

@@ -24,8 +24,8 @@
 - [x] `fetch_url` 기본 content-type 제한 구현
 - [x] Dream memory 변경 파일 audit와 inbox processed 처리 구현
 - [x] Dream workspace_write 편집 범위 도구 레벨 제한 구현
-- [ ] Discord 실제 샌드박스/실서버 통합 검증
-- [ ] SPEC 전체 완료 감사
+- [x] SPEC 전체 완료 감사
+- [ ] Discord 실서버 통합 검증 필요: `DISCORD_BOT_TOKEN`과 테스트 guild 필요
 
 ## 0. 기준 문서 확정
 

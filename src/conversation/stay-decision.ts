@@ -15,6 +15,7 @@ const schema: z.ZodType<StayDecision> = z.object({
   reason: z.string(),
   attention: z.enum(["directed_at_bot", "bot_relevant", "human_to_human", "background", "topic_changed"]),
   targetMessageIds: z.array(z.string()),
+  reactionHint: z.enum(["ack", "thanks", "funny", "agree", "care", "surprised"]).optional(),
   replyPriority: z.enum(["urgent", "normal", "low", "none"]),
   disengageReason: z
     .enum([

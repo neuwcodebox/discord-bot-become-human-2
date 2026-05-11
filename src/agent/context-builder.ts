@@ -153,6 +153,50 @@ export async function buildResponseContext(input: {
   ];
 }
 
+export async function buildReactionContext(input: {
+  agentsPath: string;
+  workspaceRoot: string;
+  events: NormalizedDiscordEvent[];
+  targetMessageIds: string[];
+  task: StayDecision;
+}): Promise<AgentContextMessage[]> {
+  const messages = materializeMessages(input.events);
+  const latest = messages.at(-1);
+  const [agents, docs] = await Promise.all([
+    readFile(input.agentsPath, "utf8"),
+    loadWorkspaceDocuments(input.workspaceRoot),
+  ]);
+  const transcript = buildTranscript(input.events, {
+    guildId: latest?.guildId ?? "unknown",
+    channelId: latest?.channelId ?? "unknown",
+    targetMessageIds: input.targetMessageIds,
+  });
+  return [
+    {
+      role: "system",
+      content:
+        "Add one natural Discord emoji reaction using the discord_react tool. Do not write a Discord message. Use exactly one tool call and then stop.",
+    },
+    {
+      role: "developer",
+      content: markdownSections({
+        "Runtime Instructions": agents,
+        "SOUL.md": docs.soul,
+        "GROUP.md": docs.group,
+        "Reaction Task": JSON.stringify(input.task, null, 2),
+      }),
+    },
+    {
+      role: "user",
+      content: markdownSections({
+        "Observed Discord Transcript": transcript,
+        "Allowed Action":
+          "Choose a target from targetMessageIds and call discord_react with one fitting emoji. Prefer subtle common reactions such as 👍, ✅, 👀, 😄, ❤️, 🙏, or 😮 when appropriate. Do not send text.",
+      }),
+    },
+  ];
+}
+
 export async function buildDreamContext(input: {
   agentsPath: string;
   workspaceRoot: string;
@@ -242,6 +286,7 @@ const stayShape = `type StayDecision = {
   reason: string;
   attention: "directed_at_bot" | "bot_relevant" | "human_to_human" | "background" | "topic_changed";
   targetMessageIds: string[];
+  reactionHint?: "ack" | "thanks" | "funny" | "agree" | "care" | "surprised";
   replyPriority: "urgent" | "normal" | "low" | "none";
   disengageReason?: "conversation_ended" | "topic_moved_without_bot" | "bot_not_needed" | "too_many_bot_turns" | "idle_timeout" | "uncertain";
 };`;

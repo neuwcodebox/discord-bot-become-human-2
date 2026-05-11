@@ -1,5 +1,5 @@
 import type { Message } from "discord.js";
-import { buildResponseContext } from "../agent/context-builder.js";
+import { buildReactionContext, buildResponseContext } from "../agent/context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
 import { AttachmentCache } from "../discord/attachment-cache.js";
 import { DiscordStreamingWriter } from "../discord/streaming-writer.js";
@@ -17,6 +17,8 @@ import type {
   GuildWorkspace,
   NormalizedDiscordEvent,
   NormalizedDiscordMessage,
+  RuntimeAgentTool,
+  StayDecision,
 } from "../types.js";
 import { delay, randomDebounceMs } from "./debounce.js";
 import { decideEngagement, directEngagementDecision } from "./engagement-decision.js";
@@ -271,7 +273,7 @@ export class ConversationOrchestrator {
       },
       "engaged follow-up stay decided",
     );
-    if (!stay.stayEngaged || stay.action === "disengage") {
+    if (stay.action === "disengage" || (!stay.stayEngaged && stay.action !== "react")) {
       this.clearPendingFollowUp(state);
       state.engagement = "not_engaged";
       state.lastEngagementChangedAt = new Date().toISOString();
@@ -332,6 +334,24 @@ export class ConversationOrchestrator {
         },
         "engaged follow-up wait exhausted",
       );
+    }
+    if (stay.action === "react") {
+      if (stay.confidence < this.config.conversation.engaged.silentStayConfidenceThreshold) {
+        log.info(
+          {
+            guildId: workspace.guildId,
+            channelId: discordMessage.channelId,
+            messageId: currentMessage.id,
+            action: stay.action,
+            confidence: stay.confidence,
+            reason: stay.reason,
+          },
+          "engaged reaction skipped below confidence threshold",
+        );
+        return;
+      }
+      await this.react(stay, events, workspace, discordMessage, currentMessage);
+      return;
     }
     if (
       stay.action !== "reply" ||
@@ -503,6 +523,102 @@ export class ConversationOrchestrator {
     }
   }
 
+  private async react(
+    task: StayDecision,
+    events: NormalizedDiscordEvent[],
+    workspace: GuildWorkspace,
+    discordMessage: Message<boolean>,
+    currentMessage: NormalizedDiscordMessage,
+  ): Promise<void> {
+    const startedAt = Date.now();
+    const targetMessageIds = task.targetMessageIds.length > 0 ? task.targetMessageIds : [currentMessage.id];
+    const reactionTask: StayDecision = { ...task, stayEngaged: true, targetMessageIds };
+    const toolContext = {
+      guildId: workspace.guildId,
+      workspaceRoot: workspace.workspaceRoot,
+      channelId: discordMessage.channelId,
+      actorUserId: discordMessage.author.id,
+    };
+    let reacted = false;
+    const tools = reactionOnlyTools(
+      createToolRegistry(this.config, toolContext, {
+        discordActions: createDiscordActionRuntimeFromMessage(discordMessage, toolContext),
+      }),
+      () => {
+        reacted = true;
+      },
+    );
+    if (tools.length === 0) {
+      log.warn(
+        {
+          guildId: workspace.guildId,
+          channelId: discordMessage.channelId,
+          messageId: currentMessage.id,
+          targetMessageIds,
+        },
+        "agent reaction skipped because discord_react tool is unavailable",
+      );
+      return;
+    }
+
+    log.info(
+      {
+        guildId: workspace.guildId,
+        channelId: discordMessage.channelId,
+        targetMessageIds,
+        reactionHint: reactionTask.reactionHint,
+      },
+      "agent reaction started",
+    );
+    try {
+      const result = await this.runner.run({
+        sessionId: `react:${workspace.guildId}:${discordMessage.channelId}`,
+        messages: await buildReactionContext({
+          agentsPath: this.agentsPath,
+          workspaceRoot: workspace.workspaceRoot,
+          events,
+          targetMessageIds,
+          task: reactionTask,
+        }),
+        tools,
+        allowEmptyText: true,
+      });
+      log.info(
+        {
+          guildId: workspace.guildId,
+          channelId: discordMessage.channelId,
+          targetMessageIds,
+          durationMs: Date.now() - startedAt,
+          outputLength: result.text.length,
+          reacted,
+        },
+        "agent reaction completed",
+      );
+      if (!reacted) {
+        log.warn(
+          {
+            guildId: workspace.guildId,
+            channelId: discordMessage.channelId,
+            targetMessageIds,
+            outputLength: result.text.length,
+          },
+          "agent reaction completed without discord_react call",
+        );
+      }
+    } catch (error) {
+      log.warn(
+        {
+          err: error,
+          guildId: workspace.guildId,
+          channelId: discordMessage.channelId,
+          targetMessageIds,
+          durationMs: Date.now() - startedAt,
+        },
+        "agent reaction failed",
+      );
+    }
+  }
+
   private async retryEmptyReply(input: {
     result: AgentRunResult;
     context: AgentContextMessage[];
@@ -589,4 +705,19 @@ function taskMessageKey(events: NormalizedDiscordEvent[]): {
 
 function replyTextOrFallback(text: string): string {
   return text.trim().length > 0 ? text : "방금 답변을 제대로 만들지 못했어요.";
+}
+
+function reactionOnlyTools(tools: RuntimeAgentTool[], onReact: () => void): RuntimeAgentTool[] {
+  const reactTool = tools.find((tool) => tool.name === "discord_react");
+  if (!reactTool) return [];
+  return [
+    {
+      ...reactTool,
+      execute: async (...args: Parameters<RuntimeAgentTool["execute"]>) => {
+        const result = await reactTool.execute(...args);
+        onReact();
+        return { ...result, terminate: true };
+      },
+    },
+  ];
 }

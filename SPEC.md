@@ -1144,6 +1144,14 @@ type StayDecision = {
 
   targetMessageIds: string[];
 
+  reactionHint?:
+    | "ack"
+    | "thanks"
+    | "funny"
+    | "agree"
+    | "care"
+    | "surprised";
+
   replyPriority:
     | "urgent"
     | "normal"
@@ -1173,7 +1181,8 @@ silent_track
   engaged 상태는 유지하지만 이번 메시지에는 반응하지 않음
 
 react
-  짧은 reaction만 사용
+  reaction 전용 agent run 실행. 이 run은 `discord_react` 도구만 사용할 수 있고 Discord 메시지를
+  작성하지 않는다.
 
 disengage
   not_engaged로 전환
@@ -1197,6 +1206,10 @@ engaged 상태의 억제 원칙:
 - `wait` decision은 pending batch를 한 번 더 짧게 재스케줄한다. 새 human message가 batch에
   추가되면 `waitCount`는 리셋된다. 재시도 후에도 계속 `wait`이면 이번 batch는 말하지 않고
   흘려보낸다.
+- `react` decision은 즉시 disengage로 해석하지 않는다. `stayEngaged=false`가 같이 오더라도
+  reaction 실행 후 engaged 상태를 잠깐 유지하고, 이후 idle timeout으로 자연스럽게 빠진다.
+- reaction agent는 `targetMessageIds` 중 하나에 자연스러운 emoji reaction을 하나 추가한다. 도구
+  실행 실패는 사용자 메시지로 알리지 않고 로그만 남긴다.
 - consecutiveBotReplies가 maxConsecutiveBotReplies에 도달하면 직접 호출 전까지 reply하지 않는다.
 - human_to_human attention이면 replyConfidenceThreshold를 더 높게 적용한다.
 - directed_at_bot이면 replyConfidenceThreshold를 낮게 적용한다.

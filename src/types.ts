@@ -265,6 +265,7 @@ export type StayDecision = {
   reason: string;
   attention: "directed_at_bot" | "bot_relevant" | "human_to_human" | "background" | "topic_changed";
   targetMessageIds: string[];
+  reactionHint?: "ack" | "thanks" | "funny" | "agree" | "care" | "surprised" | undefined;
   replyPriority: "urgent" | "normal" | "low" | "none";
   disengageReason?:
     | "conversation_ended"
@@ -317,6 +318,7 @@ export type AgentRunRequest = {
   tools?: RuntimeAgentTool[];
   signal?: AbortSignal;
   onTextDelta?: (text: string) => MaybePromise<void>;
+  allowEmptyText?: boolean;
 };
 
 export type AgentRunResult = {

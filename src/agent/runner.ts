@@ -90,7 +90,7 @@ export class PiCodexAgentRunner implements AgentRunner {
 
     await agent.prompt(prompts);
     await agent.waitForIdle();
-    if (finalText.trim().length === 0) {
+    if (!request.allowEmptyText && finalText.trim().length === 0) {
       const latestAssistant = findLatestAssistantMessage(agent.state.messages);
       const stateText = latestAssistant ? extractAssistantText(latestAssistant) : "";
       if (stateText.trim().length > 0) {

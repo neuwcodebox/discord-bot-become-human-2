@@ -1,3 +1,9 @@
+import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type { Api, Model, TSchema } from "@earendil-works/pi-ai";
+
+export type RuntimeAgentTool = AgentTool<TSchema, unknown>;
+export type RuntimeModel = Model<Api>;
+
 export type MaybePromise<T> = T | Promise<T>;
 
 export type TupleRangeMs = readonly [number, number];
@@ -294,12 +300,12 @@ export type AgentContextMessage = {
 export type AgentRunRequest = {
   sessionId: string;
   messages: AgentContextMessage[];
-  tools?: unknown[];
+  tools?: RuntimeAgentTool[];
   signal?: AbortSignal;
   onTextDelta?: (text: string) => MaybePromise<void>;
 };
 
 export type AgentRunResult = {
   text: string;
-  messages?: unknown[];
+  messages?: AgentMessage[];
 };

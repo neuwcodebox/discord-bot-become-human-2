@@ -1,8 +1,33 @@
 import { readFile, writeFile } from "node:fs/promises";
 import type { OAuthCredentials } from "@earendil-works/pi-ai/oauth";
 import { getOAuthApiKey } from "@earendil-works/pi-ai/oauth";
+import { z } from "zod";
 import { expandHome } from "../paths/runtime-paths.js";
 import type { AppConfig } from "../types.js";
+
+const nonEmptyString = z.string().min(1);
+const piAiOAuthEntrySchema = z
+  .object({
+    type: z.literal("oauth"),
+    access: nonEmptyString,
+    refresh: nonEmptyString,
+    expires: z.number(),
+  })
+  .passthrough();
+const codexAuthFileSchema = z
+  .object({
+    "openai-codex": piAiOAuthEntrySchema.optional(),
+    access_token: nonEmptyString.optional(),
+    accessToken: nonEmptyString.optional(),
+    id_token: nonEmptyString.optional(),
+    jwt: nonEmptyString.optional(),
+    token: nonEmptyString.optional(),
+    access: nonEmptyString.optional(),
+  })
+  .passthrough();
+
+type CodexAuthFile = z.infer<typeof codexAuthFileSchema>;
+type PiAiOAuthEntry = z.infer<typeof piAiOAuthEntrySchema>;
 
 export type CodexCredentials = {
   apiKey?: string;
@@ -21,7 +46,7 @@ async function loadConfiguredAuthPath(config: AppConfig): Promise<CodexCredentia
   const authPath = expandHome(config.llm.codex.authPath);
   try {
     const raw = await readFile(authPath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const parsed = codexAuthFileSchema.parse(JSON.parse(raw));
     const oauth = await loadPiAiOAuthAuth(parsed, authPath);
     if (oauth.apiKey) return oauth;
     const token =
@@ -38,12 +63,9 @@ async function loadConfiguredAuthPath(config: AppConfig): Promise<CodexCredentia
   }
 }
 
-async function loadPiAiOAuthAuth(
-  parsed: Record<string, unknown>,
-  authPath: string,
-): Promise<CodexCredentials> {
+async function loadPiAiOAuthAuth(parsed: CodexAuthFile, authPath: string): Promise<CodexCredentials> {
   const codexAuth = parsed["openai-codex"];
-  if (!isOAuthEntry(codexAuth)) return {};
+  if (!codexAuth) return {};
   const result = await getOAuthApiKey("openai-codex", {
     "openai-codex": stripType(codexAuth),
   });
@@ -53,18 +75,7 @@ async function loadPiAiOAuthAuth(
   return { apiKey: result.apiKey };
 }
 
-function isOAuthEntry(value: unknown): value is { type?: string } & OAuthCredentials {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { type?: unknown }).type === "oauth" &&
-    typeof (value as { access?: unknown }).access === "string" &&
-    typeof (value as { refresh?: unknown }).refresh === "string" &&
-    typeof (value as { expires?: unknown }).expires === "number"
-  );
-}
-
-function stripType(value: { type?: string } & OAuthCredentials): OAuthCredentials {
+function stripType(value: PiAiOAuthEntry): OAuthCredentials {
   const { type: _type, ...credentials } = value;
   return credentials;
 }

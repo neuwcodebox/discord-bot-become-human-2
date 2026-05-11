@@ -1,8 +1,7 @@
-import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { Agent } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
-import { getModel, registerBuiltInApiProviders } from "@earendil-works/pi-ai";
-import type { AgentRunRequest, AgentRunResult, AppConfig } from "../types.js";
+import { getModels, registerBuiltInApiProviders } from "@earendil-works/pi-ai";
+import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
 import { loadCodexCredentials } from "./provider.js";
 
 export interface AgentRunner {
@@ -41,7 +40,7 @@ export class PiCodexAgentRunner implements AgentRunner {
         systemPrompt,
         model,
         thinkingLevel: this.config.llm.reasoning,
-        tools: (request.tools ?? []) as AgentTool<any>[],
+        tools: request.tools ?? [],
       },
       getApiKey: async () => credentials.apiKey,
       transport: this.config.llm.codex.transport === "websocket" ? "websocket" : "auto",
@@ -76,8 +75,8 @@ export class StaticAgentRunner implements AgentRunner {
   }
 }
 
-function resolveModel(config: AppConfig): Model<any> {
-  const model = getModel("openai-codex" as any, config.llm.model as any) as Model<any> | undefined;
+function resolveModel(config: AppConfig): RuntimeModel {
+  const model = getModels("openai-codex").find((candidate) => candidate.id === config.llm.model);
   if (!model) throw new Error(`Unknown openai-codex model: ${config.llm.model}`);
   return model;
 }

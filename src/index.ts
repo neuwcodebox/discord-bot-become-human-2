@@ -15,7 +15,8 @@ export async function main(): Promise<void> {
   const runtime = await ensureRuntimeRoot(paths);
   if (!runtime.codexAuthExists) {
     console.warn(
-      `Codex auth file not found at ${paths.codexAuthPath}. Run: npx @earendil-works/pi-ai login openai-codex`,
+      `Codex auth file not found at ${paths.codexAuthPath}. Falling back to ./auth.json from pi-ai. ` +
+        "If needed, run from this project root: npx @earendil-works/pi-ai login openai-codex",
     );
   }
 

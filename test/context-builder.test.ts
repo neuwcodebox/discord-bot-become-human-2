@@ -50,6 +50,10 @@ describe("context builder", () => {
     const developerMessage = context.find((entry) => entry.role === "developer")?.content ?? "";
 
     expect(developerMessage).toContain("lastBotMessageAt");
+    expect(developerMessage).toContain("Action Semantics");
+    expect(developerMessage).toContain("react:");
+    expect(developerMessage).toContain("one Discord emoji reaction only");
+    expect(developerMessage).toContain("Do not use wait because of cooldown");
     expect(developerMessage).not.toContain("cooldownUntil");
     expect(developerMessage).not.toContain("pendingFollowUp");
     expect(developerMessage).not.toContain("waitCount");

@@ -1286,6 +1286,7 @@ developer:
   - resources/AGENTS.md 전체
   - SOUL.md 전체
   - GROUP.md 전체
+  - action semantics (`reply`, `react`, `silent_track`, `wait`, `disengage`의 의미)
   - engagement state (`cooldownUntil`, `pendingFollowUp`, `pendingTimer` 제외)
   - reply cadence constraints
   - engagedSince

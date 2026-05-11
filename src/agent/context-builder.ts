@@ -82,6 +82,7 @@ export async function buildStayDecisionContext(input: {
         "Runtime Instructions": agents,
         "SOUL.md": docs.soul,
         "GROUP.md": docs.group,
+        "Action Semantics": stayActionSemantics,
         "Engagement State": JSON.stringify(stripRuntimeOnlyState(input.state), null, 2),
       }),
     },
@@ -278,6 +279,23 @@ const engagementShape = `type EngagementDecision = {
   targetMessageIds: string[];
   expectedRole: "answer_question" | "join_casually" | "handle_attachment" | "clarify" | "react_only" | "other";
 };`;
+
+const stayActionSemantics = `Choose the smallest natural action that fits the conversation.
+
+reply:
+  Use when a Discord text reply is socially useful or needed: direct question, requested help, clarification, or a meaningful continuation.
+
+react:
+  Use when writing a text reply would be too much, but completely ignoring the message would feel a little cold. This means one Discord emoji reaction only, not a message.
+
+silent_track:
+  Use when the bot should keep listening without visible response. This is the default for human-to-human chatter, weak acknowledgements, or messages that do not need the bot.
+
+wait:
+  Use when more nearby messages are likely to arrive and the bot should decide after a short batch delay. Do not use wait because of cooldown; runtime scheduling already handled cooldown before this decision.
+
+disengage:
+  Use only when the bot should leave the conversation state entirely. Do not use disengage for a simple acknowledgement if lingering silently would feel more natural.`;
 
 const stayShape = `type StayDecision = {
   stayEngaged: boolean;

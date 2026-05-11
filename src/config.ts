@@ -4,6 +4,20 @@ import { z } from "zod";
 import type { AppConfig } from "./types.js";
 
 const tupleMsSchema = z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]);
+const defaultFollowUpBatchConfig = {
+  quietDebounceMs: [3000, 5000] as [number, number],
+  directTriggerDebounceMs: [1000, 2000] as [number, number],
+  maxWaitMs: 15000,
+  maxMessages: 4,
+};
+const followUpBatchSchema = z
+  .object({
+    quietDebounceMs: tupleMsSchema,
+    directTriggerDebounceMs: tupleMsSchema,
+    maxWaitMs: z.number().int().positive(),
+    maxMessages: z.number().int().positive(),
+  })
+  .default(defaultFollowUpBatchConfig);
 
 const configSchema: z.ZodType<AppConfig> = z.object({
   discord: z.object({
@@ -41,7 +55,7 @@ const configSchema: z.ZodType<AppConfig> = z.object({
       ambientMaxPerHour: z.number().int().nonnegative(),
     }),
     engaged: z.object({
-      replyDebounceMs: tupleMsSchema,
+      followUpBatch: followUpBatchSchema,
       minSecondsBetweenBotReplies: z.number().int().nonnegative(),
       minSecondsBetweenUnpromptedReplies: z.number().int().nonnegative(),
       maxConsecutiveBotReplies: z.number().int().nonnegative(),
@@ -131,7 +145,7 @@ export const defaultConfig: AppConfig = {
       ambientMaxPerHour: 2,
     },
     engaged: {
-      replyDebounceMs: [1500, 5000],
+      followUpBatch: defaultFollowUpBatchConfig,
       minSecondsBetweenBotReplies: 20,
       minSecondsBetweenUnpromptedReplies: 90,
       maxConsecutiveBotReplies: 1,

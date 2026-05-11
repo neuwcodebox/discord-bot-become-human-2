@@ -44,7 +44,12 @@ export type AppConfig = {
       ambientMaxPerHour: number;
     };
     engaged: {
-      replyDebounceMs: TupleRangeMs;
+      followUpBatch: {
+        quietDebounceMs: TupleRangeMs;
+        directTriggerDebounceMs: TupleRangeMs;
+        maxWaitMs: number;
+        maxMessages: number;
+      };
       minSecondsBetweenBotReplies: number;
       minSecondsBetweenUnpromptedReplies: number;
       maxConsecutiveBotReplies: number;
@@ -227,7 +232,15 @@ export type ConversationRuntimeState = {
   unrelatedHumanMessagesSinceLastBot: number;
   cooldownUntil?: string;
   pendingTimer?: NodeJS.Timeout;
+  pendingFollowUp?: PendingFollowUpBatch;
   ambientReplyTimes: string[];
+};
+
+export type PendingFollowUpBatch = {
+  since: string;
+  lastMessageAt: string;
+  messageIds: string[];
+  relatedToBot: boolean;
 };
 
 export type EngagementDecision = {

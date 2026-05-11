@@ -22,6 +22,30 @@ describe("reply cadence gates", () => {
     expect(result).toEqual({ allowed: true });
   });
 
+  it("can allow engaged follow-up messages during cooldown so stay decision can decide", () => {
+    const state = stateAfterBotReply(6);
+    state.cooldownUntil = new Date(Date.now() + 20_000).toISOString();
+
+    const result = checkReplyHardGates(defaultConfig, state, message("m1", "say more"), {
+      unprompted: false,
+      allowDuringCooldown: true,
+      allowBeforeMinReplyInterval: true,
+    });
+
+    expect(result).toEqual({ allowed: true });
+  });
+
+  it("still blocks true unprompted replies during cooldown", () => {
+    const state = stateAfterBotReply(6);
+    state.cooldownUntil = new Date(Date.now() + 20_000).toISOString();
+
+    const result = checkReplyHardGates(defaultConfig, state, message("m1", "background"), {
+      unprompted: true,
+    });
+
+    expect(result).toEqual({ allowed: false, reason: "cooldownUntil is active" });
+  });
+
   it("recognizes explicit bot mentions when checking consecutive reply gates", () => {
     const state = stateAfterBotReply(120);
     state.consecutiveBotReplies = defaultConfig.conversation.engaged.maxConsecutiveBotReplies;

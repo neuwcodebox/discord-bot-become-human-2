@@ -260,7 +260,12 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
       "ambientMaxPerHour": 2
     },
     "engaged": {
-      "replyDebounceMs": [1500, 5000],
+      "followUpBatch": {
+        "quietDebounceMs": [3000, 5000],
+        "directTriggerDebounceMs": [1000, 2000],
+        "maxWaitMs": 15000,
+        "maxMessages": 4
+      },
       "minSecondsBetweenBotReplies": 20,
       "minSecondsBetweenUnpromptedReplies": 90,
       "maxConsecutiveBotReplies": 1,
@@ -1052,6 +1057,12 @@ type ConversationRuntimeState = {
 
   cooldownUntil?: string;
   pendingTimer?: NodeJS.Timeout;
+  pendingFollowUp?: {
+    since: string;
+    lastMessageAt: string;
+    messageIds: string[];
+    relatedToBot: boolean;
+  };
 };
 ```
 
@@ -1062,8 +1073,8 @@ type ConversationRuntimeState = {
 다음 제약은 LLM decision에 맡기지 않고 orchestrator가 시스템적으로 처리한다.
 
 ```txt
-- cooldownUntil
-- minSecondsBetweenBotReplies
+- cooldownUntil (not_engaged ambient/unprompted reply에는 hard gate, engaged follow-up에는 batch earliest flush)
+- minSecondsBetweenBotReplies (not_engaged/direct reply에는 hard gate, engaged follow-up에는 batch 처리)
 - minSecondsBetweenUnpromptedReplies
 - maxConsecutiveBotReplies
 - ambientMaxPerHour
@@ -1172,9 +1183,13 @@ engaged 상태의 억제 원칙:
 ```txt
 - 사람이 서로 주고받는 모든 메시지에 답하지 않는다.
 - 마지막 봇 발화 후 사람의 명시적 질문/반응이 없으면 우선 silent_track한다.
-- engaged 상태에서 들어온 human follow-up message는 그 자체로 대화 입력이다. not_engaged ambient
-  reply에 쓰는 긴 unprompted interval로 hard block하지 않고, 짧은 reply interval/cooldown과
-  stay decision으로 답변 여부를 판단한다.
+- engaged 상태에서 들어온 human follow-up message는 그 자체로 대화 입력이다. 즉시 매 메시지마다
+  stay decision을 실행하지 않고 conversation별 pending batch에 쌓는다.
+- pending batch는 마지막 메시지 후 quiet debounce가 지나거나, 첫 pending message 후 max wait가
+  지나거나, pending message count가 maxMessages에 도달하거나, 직접 호출용 짧은 debounce가 지나면
+  flush한다.
+- cooldown은 non-directed follow-up batch의 earliest flush time으로만 사용한다. 메시지가 충분히
+  쌓이거나 max wait에 도달하면 cooldown 중이어도 stay decision으로 넘어간다.
 - consecutiveBotReplies가 maxConsecutiveBotReplies에 도달하면 직접 호출 전까지 reply하지 않는다.
 - human_to_human attention이면 replyConfidenceThreshold를 더 높게 적용한다.
 - directed_at_bot이면 replyConfidenceThreshold를 낮게 적용한다.
@@ -1265,7 +1280,8 @@ user:
   - bot message에 대한 reply/reaction 여부
 ```
 
-`cooldownUntil` 등 hard gate는 orchestrator가 처리한다. LLM에게 최종 권한을 넘기지 않는다.
+`cooldownUntil` 등 rate control은 orchestrator가 처리한다. 다만 engaged follow-up은 메시지를 버리지
+않고 pending batch에 모은 뒤 flush 조건을 만족했을 때 stay decision으로 넘긴다.
 
 ### 15.3 response generation
 
@@ -1838,7 +1854,8 @@ src/
 - 대화 이력 context는 시간순 XML-like transcript다.
 - reply/attachment/embed/reaction/edit/delete는 해당 msg 내부에 배치된다.
 - engagement state가 engaged여도 모든 human message에 답하지 않는다.
-- cooldown/rate limit/연속 발화 제한은 runtime hard gate로 처리한다.
+- cooldown/rate limit/연속 발화 제한은 runtime에서 처리한다. engaged follow-up은 hard drop하지 않고
+  pending batch로 모아 판단한다.
 - response generation은 ReAct agent run으로 수행한다.
 - Dream memory 관리도 agent run으로 수행한다.
 - 응답 스트리밍은 Discord message edit과 multi-message continuation으로 처리한다.

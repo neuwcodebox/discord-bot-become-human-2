@@ -17,6 +17,11 @@ import type {
 } from "../types.js";
 import { delay, randomDebounceMs } from "./debounce.js";
 import { decideEngagement, directEngagementDecision } from "./engagement-decision.js";
+import {
+  appendFollowUpMessage,
+  computeFollowUpFlushDelayMs,
+  shouldFlushByMessageCount,
+} from "./follow-up-batch.js";
 import { checkReplyHardGates, isDirectedAtBot, noteBotReply, noteHumanMessage } from "./reply-cadence.js";
 import { ConversationStateStore, conversationId } from "./state-store.js";
 import { decideStay, forcedSilentStay } from "./stay-decision.js";
@@ -108,6 +113,7 @@ export class ConversationOrchestrator {
     }
 
     if (shouldIdleDisengage(this.config, state)) {
+      this.clearPendingFollowUp(state);
       state.engagement = "not_engaged";
       state.lastEngagementChangedAt = new Date().toISOString();
       log.info(
@@ -117,8 +123,125 @@ export class ConversationOrchestrator {
       return;
     }
 
-    const gate = checkReplyHardGates(this.config, state, message, {
+    await this.queueEngagedFollowUp({
+      conversationKey: id,
+      state,
+      workspace,
+      discordMessage,
+      message,
+      relatedToBot,
+    });
+  }
+
+  private async queueEngagedFollowUp(input: {
+    conversationKey: string;
+    state: ReturnType<ConversationStateStore["get"]>;
+    workspace: GuildWorkspace;
+    discordMessage?: Message<boolean> | undefined;
+    message: NormalizedDiscordMessage;
+    relatedToBot: boolean;
+  }): Promise<void> {
+    const now = new Date();
+    const batch = appendFollowUpMessage({
+      batch: input.state.pendingFollowUp,
+      messageId: input.message.id,
+      relatedToBot: input.relatedToBot,
+      now,
+    });
+    input.state.pendingFollowUp = batch;
+    if (input.state.pendingTimer) clearTimeout(input.state.pendingTimer);
+
+    const config = this.config.conversation.engaged.followUpBatch;
+    const flushByCount = shouldFlushByMessageCount(batch, config);
+    const debounceMs = randomDebounceMs(
+      batch.relatedToBot ? config.directTriggerDebounceMs : config.quietDebounceMs,
+    );
+    const delayMs = flushByCount
+      ? 0
+      : computeFollowUpFlushDelayMs({
+          batch,
+          config,
+          state: input.state,
+          nowMs: now.getTime(),
+          debounceMs,
+        });
+    log.info(
+      {
+        guildId: input.workspace.guildId,
+        channelId: input.message.channelId,
+        messageId: input.message.id,
+        pendingMessageIds: batch.messageIds,
+        pendingCount: batch.messageIds.length,
+        relatedToBot: batch.relatedToBot,
+        delayMs,
+        flushByCount,
+      },
+      "engaged follow-up queued",
+    );
+
+    if (delayMs === 0) {
+      await this.flushEngagedFollowUp(input.conversationKey, input.workspace, input.discordMessage);
+      return;
+    }
+
+    input.state.pendingTimer = setTimeout(() => {
+      void this.flushEngagedFollowUp(input.conversationKey, input.workspace, input.discordMessage).catch(
+        (error) => {
+          log.error(
+            { err: error, guildId: input.workspace.guildId, channelId: input.message.channelId },
+            "engaged follow-up flush failed",
+          );
+        },
+      );
+    }, delayMs);
+    input.state.pendingTimer.unref();
+  }
+
+  private async flushEngagedFollowUp(
+    conversationKey: string,
+    workspace: GuildWorkspace,
+    discordMessage?: Message<boolean>,
+  ): Promise<void> {
+    const state = this.states.get(conversationKey);
+    const batch = state.pendingFollowUp;
+    if (!batch) return;
+    this.clearPendingFollowUp(state);
+    if (state.engagement !== "engaged") return;
+    if (!discordMessage) {
+      log.warn({ guildId: workspace.guildId }, "engaged follow-up flush skipped without discord message");
+      return;
+    }
+
+    const events = await new EventLog(workspace.workspaceRoot).readRecent(
+      this.config.conversation.maxRecentMessages,
+    );
+    const currentMessage = findMessageById(events, batch.messageIds.at(-1));
+    if (!currentMessage) {
+      log.warn(
+        {
+          guildId: workspace.guildId,
+          channelId: discordMessage.channelId,
+          pendingMessageIds: batch.messageIds,
+        },
+        "engaged follow-up flush skipped because latest message is missing from event log",
+      );
+      return;
+    }
+
+    log.info(
+      {
+        guildId: workspace.guildId,
+        channelId: discordMessage.channelId,
+        pendingMessageIds: batch.messageIds,
+        pendingCount: batch.messageIds.length,
+        relatedToBot: batch.relatedToBot,
+      },
+      "engaged follow-up flushing",
+    );
+    const gate = checkReplyHardGates(this.config, state, currentMessage, {
       unprompted: false,
+      allowDuringCooldown: true,
+      allowBeforeMinReplyInterval: true,
       botUserId: this.botIdentity.userId,
       botNames: this.botIdentity.names,
     });
@@ -129,18 +252,29 @@ export class ConversationOrchestrator {
           workspaceRoot: workspace.workspaceRoot,
           state,
           events,
-          currentMessage: message,
+          currentMessage,
         })
-      : forcedSilentStay(gate.reason, message.id);
-
+      : forcedSilentStay(gate.reason, currentMessage.id);
+    log.info(
+      {
+        guildId: workspace.guildId,
+        channelId: discordMessage.channelId,
+        pendingMessageIds: batch.messageIds,
+        action: stay.action,
+        confidence: stay.confidence,
+        reason: stay.reason,
+      },
+      "engaged follow-up stay decided",
+    );
     if (!stay.stayEngaged || stay.action === "disengage") {
+      this.clearPendingFollowUp(state);
       state.engagement = "not_engaged";
       state.lastEngagementChangedAt = new Date().toISOString();
       log.info(
         {
           guildId: workspace.guildId,
-          channelId: event.channelId,
-          messageId: event.messageId,
+          channelId: discordMessage.channelId,
+          messageId: currentMessage.id,
           action: stay.action,
           reason: stay.reason,
           confidence: stay.confidence,
@@ -153,11 +287,11 @@ export class ConversationOrchestrator {
       stay.action !== "reply" ||
       stay.confidence < this.config.conversation.engaged.replyConfidenceThreshold
     ) {
-      log.debug(
+      log.info(
         {
           guildId: workspace.guildId,
-          channelId: event.channelId,
-          messageId: event.messageId,
+          channelId: discordMessage.channelId,
+          messageId: currentMessage.id,
           action: stay.action,
           confidence: stay.confidence,
           reason: stay.reason,
@@ -166,8 +300,13 @@ export class ConversationOrchestrator {
       );
       return;
     }
-    await delay(randomDebounceMs(this.config.conversation.engaged.replyDebounceMs));
     await this.reply(stay, events, workspace, discordMessage);
+  }
+
+  private clearPendingFollowUp(state: ReturnType<ConversationStateStore["get"]>): void {
+    if (state.pendingTimer) clearTimeout(state.pendingTimer);
+    delete state.pendingTimer;
+    delete state.pendingFollowUp;
   }
 
   private async maybeAmbientEngage(
@@ -318,6 +457,19 @@ function shouldIdleDisengage(config: AppConfig, state: ReturnType<ConversationSt
   return (
     Date.now() - Date.parse(state.lastHumanMessageAt) >= config.conversation.engaged.disengageAfterIdleMs
   );
+}
+
+function findMessageById(
+  events: NormalizedDiscordEvent[],
+  messageId: string | undefined,
+): NormalizedDiscordMessage | undefined {
+  if (!messageId) return undefined;
+  return [...events]
+    .reverse()
+    .find(
+      (event): event is Extract<NormalizedDiscordEvent, { type: "message_create" | "message_update" }> =>
+        (event.type === "message_create" || event.type === "message_update") && event.messageId === messageId,
+    )?.payload;
 }
 
 function taskMessageKey(events: NormalizedDiscordEvent[]): {

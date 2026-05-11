@@ -26,9 +26,10 @@ export async function ensureGuildWorkspace(paths: RuntimePaths, workspace: Guild
 
 export async function ensureUserProfile(
   workspaceRoot: string,
-  user: { id: string; username: string; displayName: string },
+  user: { id: string; username: string; displayName: string; isBot?: boolean },
   now = new Date(),
 ): Promise<void> {
+  if (user.isBot) return;
   const userRoot = join(workspaceRoot, "users", user.id);
   await mkdir(userRoot, { recursive: true });
   const profilePath = join(userRoot, "USER.md");

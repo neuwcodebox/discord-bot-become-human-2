@@ -26,9 +26,7 @@ export class MemoryCompactor {
     if (slice.length < min) return undefined;
 
     const cursors = slice.map((event) => event.cursor ?? 0).filter((cursor) => cursor > 0);
-    const participants = [
-      ...new Set(slice.map((event) => event.authorId).filter((id): id is string => Boolean(id))),
-    ];
+    const participants = [...new Set(slice.flatMap((event) => humanAuthorId(event) ?? []))];
     const history = await readJsonl<HistoryEntry>(historyPath);
     const entry: HistoryEntry = {
       cursor: history.length + 1,
@@ -43,6 +41,12 @@ export class MemoryCompactor {
     await writeCursor(cursorPath, entry.toEventCursor);
     return entry;
   }
+}
+
+function humanAuthorId(event: NormalizedDiscordEvent): string | undefined {
+  if (event.type !== "message_create" && event.type !== "message_update") return event.authorId;
+  if (event.payload.author.isBot) return undefined;
+  return event.authorId;
 }
 
 function summarizeEvents(events: NormalizedDiscordEvent[]): string {

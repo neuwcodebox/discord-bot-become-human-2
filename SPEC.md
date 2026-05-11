@@ -632,16 +632,18 @@ users/
 
 ### 8.3 lazy 생성과 로딩
 
-새 메시지가 들어오면 runtime은 작성자의 사용자 폴더를 lazy 생성하고 alias 정보를 갱신한다.
+새 human-authored 메시지가 들어오면 runtime은 작성자의 사용자 폴더를 lazy 생성하고 alias 정보를 갱신한다.
+bot-authored 메시지는 transcript와 event log에는 남길 수 있지만, `users/<bot_id>/USER.md`와
+`aliases.json`은 생성하지 않는다.
 
 ContextBuilder는 현재 turn에 필요한 사용자 프로필만 로딩한다.
 
 ```txt
-- 현재 메시지 작성자
+- 현재 human 메시지 작성자
 - reply 대상 사용자
 - 멘션된 사용자
-- 최근 대화 참여자
-- 봇이 응답하려는 target message 작성자
+- 최근 human 대화 참여자
+- 봇이 응답하려는 target message의 human 작성자
 ```
 
 로딩 대상이 된 `USER.md`는 요약하지 않고 전체를 넣는다. 프로필 파일이 비대해지면 Dream이 파일 자체를 정리해야 한다.
@@ -1752,7 +1754,7 @@ src/
 - reaction add/remove 수집
 - message normalizer 구현
 - memory/events.jsonl 기록
-- users/<id>/USER.md lazy 생성
+- human-authored message에 대해서만 users/<id>/USER.md lazy 생성
 - aliases.json 업데이트
 ```
 

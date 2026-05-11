@@ -52,4 +52,26 @@ describe("workspace init", () => {
       "B name",
     );
   });
+
+  it("does not create USER.md for bot authors", async () => {
+    const temp = await mkdtemp(join(tmpdir(), "dbh2-"));
+    const projectRoot = resolve(".");
+    const config = { ...defaultConfig, runtime: { ...defaultConfig.runtime, rootDir: temp } };
+    const paths = createRuntimePaths(projectRoot, config);
+    const workspace = getGuildWorkspace(paths, "a");
+    await ensureGuildWorkspace(paths, workspace);
+
+    await ensureUserProfile(workspace.workspaceRoot, {
+      id: "bot-1",
+      username: "bot",
+      displayName: "Bot",
+      isBot: true,
+    });
+
+    await expect(
+      readFile(join(workspace.workspaceRoot, "users", "bot-1", "USER.md"), "utf8"),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 });

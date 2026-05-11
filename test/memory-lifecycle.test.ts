@@ -37,9 +37,37 @@ describe("memory lifecycle", () => {
     const appended = await log.append(messageEvent("m4", "u3", "fourth"));
     expect(appended.cursor).toBe(4);
   });
+
+  it("does not target bot-authored USER.md files during compaction", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dbh2-memory-"));
+    const log = new EventLog(root);
+    const config = {
+      ...defaultConfig,
+      memory: {
+        ...defaultConfig.memory,
+        compaction: { enabled: true, maxEventsBeforeCompaction: 3, minEventsPerSummary: 2 },
+      },
+      conversation: { ...defaultConfig.conversation, maxRecentMessages: 1 },
+    };
+
+    await log.append(messageEvent("m1", "human-1", "hello"));
+    await log.append(messageEvent("m2", "bot-1", "bot reply", true));
+    await log.append(messageEvent("m3", "human-2", "next"));
+
+    const entry = await new MemoryCompactor(root, config).compactIfNeeded();
+
+    expect(entry?.participants).toEqual(["human-1"]);
+    expect(entry?.memoryTargets).toContain("users/human-1/USER.md");
+    expect(entry?.memoryTargets).not.toContain("users/bot-1/USER.md");
+  });
 });
 
-function messageEvent(messageId: string, authorId: string, content: string): NormalizedDiscordEvent {
+function messageEvent(
+  messageId: string,
+  authorId: string,
+  content: string,
+  isBot = false,
+): NormalizedDiscordEvent {
   return {
     type: "message_create",
     time: "2026-05-10T12:00:00.000Z",
@@ -51,7 +79,7 @@ function messageEvent(messageId: string, authorId: string, content: string): Nor
       id: messageId,
       guildId: "g",
       channelId: "c",
-      author: { id: authorId, username: authorId, displayName: authorId, isBot: false },
+      author: { id: authorId, username: authorId, displayName: authorId, isBot },
       content,
       cleanContent: content,
       createdAt: "2026-05-10T12:00:00.000Z",

@@ -65,9 +65,10 @@ npm run build
 
 - 기존 모듈 경계를 따른다. Discord normalization, conversation orchestration, agent runner,
   workspace/memory/tools 로직을 섞지 않는다.
-- 동작 로그는 `src/logger.ts`의 pino logger를 사용한다. 새 로그에는 Discord 메시지 본문, OAuth token,
-  authorization header, refresh token을 넣지 말고 ID, 결정 상태, 소요시간, 길이/개수 같은 메타데이터를
-  남긴다.
+- 동작 로그는 `src/logger.ts`의 pino logger를 사용한다. 콘솔 기본값은 `pino-pretty`이고,
+  `LOG_FORMAT=json`으로 JSON 출력을 강제할 수 있어야 한다. 새 로그에는 Discord 메시지 본문, OAuth
+  token, authorization header, refresh token을 넣지 말고 ID, 결정 상태, 소요시간, 길이/개수 같은
+  메타데이터를 남긴다.
 - pi와 nanobot은 dependency 또는 참조 구현으로만 사용한다. 새 기능은 이 프로젝트의 타입, 테스트,
   sandbox 경계에 맞춰 구현한다.
 - 동작 변경은 작게 나누고, 변경한 경계에 테스트를 추가한다. 특히 인증 경로, workspace guard,

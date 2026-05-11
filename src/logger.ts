@@ -1,6 +1,18 @@
-import pino from "pino";
+import pino, { type LoggerOptions } from "pino";
 
-export const logger = pino({
+const prettyTransport =
+  process.env.NODE_ENV === "test" || process.env.LOG_FORMAT === "json"
+    ? undefined
+    : {
+        target: "pino-pretty",
+        options: {
+          colorize: process.env.NO_COLOR === undefined,
+          ignore: "pid,hostname",
+          translateTime: "SYS:standard",
+        },
+      };
+
+const loggerOptions: LoggerOptions = {
   level:
     process.env.LOG_LEVEL ??
     process.env.BOT_LOG_LEVEL ??
@@ -21,7 +33,13 @@ export const logger = pino({
     ],
     censor: "[redacted]",
   },
-});
+};
+
+if (prettyTransport) {
+  loggerOptions.transport = prettyTransport;
+}
+
+export const logger = pino(loggerOptions);
 
 export function childLogger(name: string): pino.Logger {
   return logger.child({ module: name });

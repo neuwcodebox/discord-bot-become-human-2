@@ -319,10 +319,11 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
 
 Discord token은 `config.json`에 직접 저장하지 않고 `discord.tokenEnv`가 가리키는 환경변수에서 읽는다. Codex auth는 `llm.codex.authPath`에서 읽는다. Codex 로그인은 프로젝트 루트에서 `npm run login:codex`로 수행하며, 이 스크립트는 `@earendil-works/pi-ai/oauth`의 `loginOpenAICodex()`를 호출하고 반환된 OAuth credential을 `llm.codex.authPath`에 저장한다. 현재 작업 디렉터리의 `auth.json`은 읽지 않는다.
 
-런타임 로그는 `pino` JSON 로그를 사용한다. 로그 레벨은 `LOG_LEVEL` 또는 `BOT_LOG_LEVEL` 환경변수로
-조정하며 기본값은 `info`다. 디버깅 시 `LOG_LEVEL=debug npm run dev`로 Discord event 정규화,
-conversation decision, agent run, tool execution, dream run 흐름을 확인한다. 기본 로그에는 Discord
-메시지 본문, Codex token, refresh token, authorization header를 남기지 않는다.
+런타임 로그는 `pino`를 사용한다. 기본 콘솔 출력은 `pino-pretty`로 사람이 읽기 좋게 표시하고,
+`LOG_FORMAT=json`을 설정하면 JSON 로그를 출력한다. 로그 레벨은 `LOG_LEVEL` 또는 `BOT_LOG_LEVEL`
+환경변수로 조정하며 기본값은 `info`다. 디버깅 시 `LOG_LEVEL=debug npm run dev`로 Discord event
+정규화, conversation decision, agent run, tool execution, dream run 흐름을 확인한다. 기본 로그에는
+Discord 메시지 본문, Codex token, refresh token, authorization header를 남기지 않는다.
 
 ---
 

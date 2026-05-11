@@ -10,6 +10,9 @@ import { EventLog } from "../memory/event-log.js";
 import { createDiscordActionRuntimeFromMessage } from "../tools/discord-actions.js";
 import { createToolRegistry } from "../tools/tool-registry.js";
 import type {
+  AgentContextMessage,
+  AgentRunRequest,
+  AgentRunResult,
   AppConfig,
   GuildWorkspace,
   NormalizedDiscordEvent,
@@ -447,7 +450,15 @@ export class ConversationOrchestrator {
         tools,
         onTextDelta: (delta) => writer.append(delta),
       });
-      const sent = await writer.finish(result.text);
+      const finalResult = await this.retryEmptyReply({
+        result,
+        context,
+        workspace,
+        discordMessage,
+        streaming: true,
+        onTextDelta: (delta) => writer.append(delta),
+      });
+      const sent = await writer.finish(replyTextOrFallback(finalResult.text));
       if (sent) noteBotReply(this.config, state, sent.id);
       log.info(
         {
@@ -456,7 +467,7 @@ export class ConversationOrchestrator {
           messageId: sent?.id,
           streaming: true,
           durationMs: Date.now() - startedAt,
-          outputLength: result.text.length,
+          outputLength: finalResult.text.length,
         },
         "agent reply completed",
       );
@@ -466,8 +477,15 @@ export class ConversationOrchestrator {
         messages: context,
         tools,
       });
+      const finalResult = await this.retryEmptyReply({
+        result,
+        context,
+        workspace,
+        discordMessage,
+        streaming: false,
+      });
       const sent = await discordMessage.reply({
-        content: result.text,
+        content: replyTextOrFallback(finalResult.text),
         allowedMentions: { parse: [], repliedUser: false },
       });
       noteBotReply(this.config, state, sent.id);
@@ -478,11 +496,45 @@ export class ConversationOrchestrator {
           messageId: sent.id,
           streaming: false,
           durationMs: Date.now() - startedAt,
-          outputLength: result.text.length,
+          outputLength: finalResult.text.length,
         },
         "agent reply completed",
       );
     }
+  }
+
+  private async retryEmptyReply(input: {
+    result: AgentRunResult;
+    context: AgentContextMessage[];
+    workspace: GuildWorkspace;
+    discordMessage: Message<boolean>;
+    streaming: boolean;
+    onTextDelta?: ((text: string) => Promise<void>) | undefined;
+  }): Promise<AgentRunResult> {
+    if (input.result.text.trim().length > 0) return input.result;
+    log.warn(
+      {
+        guildId: input.workspace.guildId,
+        channelId: input.discordMessage.channelId,
+        messageId: input.discordMessage.id,
+        streaming: input.streaming,
+      },
+      "agent reply was empty; retrying without tools",
+    );
+    const retryRequest: AgentRunRequest = {
+      sessionId: `discord-retry:${input.workspace.guildId}:${input.discordMessage.channelId}`,
+      messages: [
+        ...input.context,
+        {
+          role: "developer",
+          content:
+            "The previous response generation returned empty text. Produce the Discord reply now as plain message text only. Do not call tools.",
+        },
+      ],
+    };
+    return this.runner.run(
+      input.onTextDelta ? { ...retryRequest, onTextDelta: input.onTextDelta } : retryRequest,
+    );
   }
 
   private isStrongTrigger(message: NormalizedDiscordMessage): boolean {
@@ -533,4 +585,8 @@ function taskMessageKey(events: NormalizedDiscordEvent[]): {
     channelId: latest.channelId,
     ...(latest.threadId ? { threadId: latest.threadId } : {}),
   };
+}
+
+function replyTextOrFallback(text: string): string {
+  return text.trim().length > 0 ? text : "방금 답변을 제대로 만들지 못했어요.";
 }

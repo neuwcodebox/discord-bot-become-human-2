@@ -62,18 +62,49 @@ export class PiCodexAgentRunner implements AgentRunner {
     );
 
     let finalText = "";
+    let currentAssistantText = "";
     agent.subscribe(async (event) => {
-      if (event.type !== "message_update" && event.type !== "message_end") return;
-      const text = extractAssistantText(event.message);
-      if (event.type === "message_update") {
-        const delta = text.slice(finalText.length);
-        if (delta) await request.onTextDelta?.(delta);
+      if (event.type === "message_start" && event.message.role === "assistant") {
+        currentAssistantText = "";
+        return;
       }
+      if (event.type === "message_update") {
+        if (event.assistantMessageEvent.type === "text_delta") {
+          currentAssistantText += event.assistantMessageEvent.delta;
+          finalText = currentAssistantText;
+          await request.onTextDelta?.(event.assistantMessageEvent.delta);
+          return;
+        }
+        const text = extractAssistantText(event.message);
+        const delta = text.startsWith(currentAssistantText) ? text.slice(currentAssistantText.length) : text;
+        currentAssistantText = text;
+        finalText = text;
+        if (delta) await request.onTextDelta?.(delta);
+        return;
+      }
+      if (event.type !== "message_end" || event.message.role !== "assistant") return;
+      const text = extractAssistantText(event.message);
+      currentAssistantText = text;
       finalText = text;
     });
 
     await agent.prompt(prompts);
     await agent.waitForIdle();
+    if (finalText.trim().length === 0) {
+      const latestAssistant = findLatestAssistantMessage(agent.state.messages);
+      const stateText = latestAssistant ? extractAssistantText(latestAssistant) : "";
+      if (stateText.trim().length > 0) {
+        finalText = stateText;
+      } else {
+        log.warn(
+          {
+            sessionId: request.sessionId,
+            ...summarizeAssistantMessage(latestAssistant),
+          },
+          "agent run produced empty text",
+        );
+      }
+    }
     log.info(
       {
         sessionId: request.sessionId,
@@ -111,4 +142,37 @@ function extractAssistantText(message: AgentMessage): string {
     .map((part) => (part.type === "text" ? part.text : ""))
     .filter(Boolean)
     .join("");
+}
+
+function findLatestAssistantMessage(
+  messages: AgentMessage[],
+): Extract<AgentMessage, { role: "assistant" }> | undefined {
+  return messages.findLast((message): message is Extract<AgentMessage, { role: "assistant" }> => {
+    return message.role === "assistant";
+  });
+}
+
+function summarizeAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }> | undefined): {
+  stopReason?: string;
+  errorMessage?: string;
+  contentTypes?: string[];
+  textPartCount?: number;
+  textLength?: number;
+  thinkingPartCount?: number;
+  toolCallNames?: string[];
+} {
+  if (!message) return {};
+  const textParts = message.content.filter((part) => part.type === "text");
+  const thinkingParts = message.content.filter((part) => part.type === "thinking");
+  const toolCalls = message.content.filter((part) => part.type === "toolCall");
+  const summary: ReturnType<typeof summarizeAssistantMessage> = {
+    stopReason: message.stopReason,
+    contentTypes: message.content.map((part) => part.type),
+    textPartCount: textParts.length,
+    textLength: textParts.reduce((sum, part) => sum + part.text.length, 0),
+    thinkingPartCount: thinkingParts.length,
+    toolCallNames: toolCalls.map((part) => part.name),
+  };
+  if (message.errorMessage) summary.errorMessage = message.errorMessage;
+  return summary;
 }

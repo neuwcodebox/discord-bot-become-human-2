@@ -1891,6 +1891,10 @@ Use two core engagement states: `not_engaged` and `engaged`. In `not_engaged`, d
 
 Response generation and Dream memory management use the pi agent harness in ReAct style. Stream response text into Discord by creating a placeholder message, editing it as deltas arrive, and opening the next message immediately when the current one approaches the length limit.
 
+If a response generation run completes with empty text, the runtime treats it as an invalid reply result. It logs the
+assistant message summary for debugging, retries once with tools disabled and a strict plain-text reply instruction,
+and only then falls back to a short visible failure message instead of leaving the streaming placeholder in Discord.
+
 Context is Markdown with XML-like blocks where structure matters. Discord transcript is raw, compact XML-like message blocks ordered oldest to newest. Each message contains its own reply, attachment, embed, mention, reaction, edit, and deletion data.
 
 Long-term memory is managed through `memory/events.jsonl`, `memory/history.jsonl`, `memory/inbox.jsonl`, `memory/MEMORY.md`, and per-user `USER.md` files. A Dream agent runs at appropriate times to read new history and update durable memory files using workspace file tools.

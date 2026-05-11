@@ -14,6 +14,7 @@ import type {
   NormalizedDiscordEvent,
   NormalizedDiscordMessage,
 } from "../types.js";
+import { delay, randomDebounceMs } from "./debounce.js";
 import { decideEngagement, directEngagementDecision } from "./engagement-decision.js";
 import { checkReplyHardGates, isDirectedAtBot, noteBotReply, noteHumanMessage } from "./reply-cadence.js";
 import { ConversationStateStore, conversationId } from "./state-store.js";
@@ -64,6 +65,7 @@ export class ConversationOrchestrator {
       state.engagement = "engaged";
       state.engagedSince = new Date().toISOString();
       state.lastEngagementChangedAt = state.engagedSince;
+      await delay(randomDebounceMs(this.config.conversation.notEngaged.engageDebounceMs));
       await this.reply(decision, events, workspace, discordMessage);
       return;
     }
@@ -96,6 +98,7 @@ export class ConversationOrchestrator {
       stay.confidence < this.config.conversation.engaged.replyConfidenceThreshold
     )
       return;
+    await delay(randomDebounceMs(this.config.conversation.engaged.replyDebounceMs));
     await this.reply(stay, events, workspace, discordMessage);
   }
 

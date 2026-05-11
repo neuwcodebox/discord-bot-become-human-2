@@ -20,7 +20,8 @@
 - [x] Dream scheduler interval/compaction trigger 골격 구현
 - [x] attachment image content block 반환 구현
 - [x] `weather_lookup` Open-Meteo 기반 구현
-- [ ] Dream memory가 실제 파일 편집 결과를 audit/검증하도록 강화
+- [x] Dream memory 변경 파일 audit와 inbox processed 처리 구현
+- [x] Dream workspace_write 편집 범위 도구 레벨 제한 구현
 - [ ] Discord 실제 샌드박스/실서버 통합 검증
 - [ ] SPEC 전체 완료 감사
 

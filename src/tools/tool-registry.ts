@@ -14,7 +14,11 @@ import { workspaceRead, workspaceSearch, workspaceWrite } from "./workspace-file
 export function createToolRegistry(
   config: AppConfig,
   context: ToolContext,
-  integrations: { discordActions?: DiscordActionRuntime; attachmentCache?: AttachmentCache } = {},
+  integrations: {
+    discordActions?: DiscordActionRuntime;
+    attachmentCache?: AttachmentCache;
+    writePolicy?: (path: string) => void;
+  } = {},
 ): AgentTool<any>[] {
   const tools: AgentTool<any>[] = [];
   if (config.tools.workspaceFiles) {
@@ -35,6 +39,7 @@ export function createToolRegistry(
       parameters: Type.Object({ path: Type.String(), contents: Type.String() }),
       execute: async (_toolCallId, params) => {
         const args = params as { path: string; contents: string };
+        integrations.writePolicy?.(args.path);
         return jsonResult(await workspaceWrite(context, args.path, args.contents));
       },
     });

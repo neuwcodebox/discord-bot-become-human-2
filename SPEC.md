@@ -1062,6 +1062,7 @@ type ConversationRuntimeState = {
     lastMessageAt: string;
     messageIds: string[];
     relatedToBot: boolean;
+    waitCount: number;
   };
 };
 ```
@@ -1166,7 +1167,7 @@ reply
   응답 생성 agent run 실행
 
 wait
-  아직 답하지 않고 debounce window 유지
+  아직 답하지 않고 pending batch를 짧게 재스케줄
 
 silent_track
   engaged 상태는 유지하지만 이번 메시지에는 반응하지 않음
@@ -1190,6 +1191,12 @@ engaged 상태의 억제 원칙:
   flush한다.
 - cooldown은 non-directed follow-up batch의 earliest flush time으로만 사용한다. 메시지가 충분히
   쌓이거나 max wait에 도달하면 cooldown 중이어도 stay decision으로 넘어간다.
+- stay decision context에는 `cooldownUntil`, `pendingFollowUp`, `pendingTimer` 같은 런타임
+  스케줄링 필드를 넣지 않는다. decide 단계에 도달했다면 cooldown 여부는 이미 orchestrator가
+  처리한 것이다.
+- `wait` decision은 pending batch를 한 번 더 짧게 재스케줄한다. 새 human message가 batch에
+  추가되면 `waitCount`는 리셋된다. 재시도 후에도 계속 `wait`이면 이번 batch는 말하지 않고
+  흘려보낸다.
 - consecutiveBotReplies가 maxConsecutiveBotReplies에 도달하면 직접 호출 전까지 reply하지 않는다.
 - human_to_human attention이면 replyConfidenceThreshold를 더 높게 적용한다.
 - directed_at_bot이면 replyConfidenceThreshold를 낮게 적용한다.
@@ -1266,7 +1273,7 @@ developer:
   - resources/AGENTS.md 전체
   - SOUL.md 전체
   - GROUP.md 전체
-  - engagement state
+  - engagement state (`cooldownUntil`, `pendingFollowUp`, `pendingTimer` 제외)
   - reply cadence constraints
   - engagedSince
   - lastBotMessageAt

@@ -15,6 +15,7 @@ export function appendFollowUpMessage(input: {
       lastMessageAt: time,
       messageIds: [input.messageId],
       relatedToBot: input.relatedToBot,
+      waitCount: 0,
     };
   }
   return {
@@ -22,6 +23,15 @@ export function appendFollowUpMessage(input: {
     lastMessageAt: time,
     messageIds: appendUnique(input.batch.messageIds, input.messageId),
     relatedToBot: input.batch.relatedToBot || input.relatedToBot,
+    waitCount: 0,
+  };
+}
+
+export function markFollowUpWait(batch: PendingFollowUpBatch, now: Date): PendingFollowUpBatch {
+  return {
+    ...batch,
+    lastMessageAt: now.toISOString(),
+    waitCount: batch.waitCount + 1,
   };
 }
 

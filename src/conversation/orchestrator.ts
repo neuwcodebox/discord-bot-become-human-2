@@ -20,6 +20,7 @@ import { decideEngagement, directEngagementDecision } from "./engagement-decisio
 import {
   appendFollowUpMessage,
   computeFollowUpFlushDelayMs,
+  markFollowUpWait,
   shouldFlushByMessageCount,
 } from "./follow-up-batch.js";
 import { checkReplyHardGates, isDirectedAtBot, noteBotReply, noteHumanMessage } from "./reply-cadence.js";
@@ -27,6 +28,7 @@ import { ConversationStateStore, conversationId } from "./state-store.js";
 import { decideStay, forcedSilentStay } from "./stay-decision.js";
 
 const log = childLogger("conversation");
+const maxFollowUpWaitRetries = 1;
 
 export class ConversationOrchestrator {
   private readonly states = new ConversationStateStore();
@@ -282,6 +284,51 @@ export class ConversationOrchestrator {
         "conversation disengaged by stay decision",
       );
       return;
+    }
+    if (stay.action === "wait") {
+      if (batch.waitCount < maxFollowUpWaitRetries) {
+        const waitBatch = markFollowUpWait(batch, new Date());
+        const config = this.config.conversation.engaged.followUpBatch;
+        const delayMs = randomDebounceMs(
+          waitBatch.relatedToBot ? config.directTriggerDebounceMs : config.quietDebounceMs,
+        );
+        state.pendingFollowUp = waitBatch;
+        state.pendingTimer = setTimeout(() => {
+          void this.flushEngagedFollowUp(conversationKey, workspace, discordMessage).catch((error) => {
+            log.error(
+              { err: error, guildId: workspace.guildId, channelId: discordMessage.channelId },
+              "engaged follow-up wait retry failed",
+            );
+          });
+        }, delayMs);
+        state.pendingTimer.unref();
+        log.info(
+          {
+            guildId: workspace.guildId,
+            channelId: discordMessage.channelId,
+            messageId: currentMessage.id,
+            pendingMessageIds: waitBatch.messageIds,
+            waitCount: waitBatch.waitCount,
+            delayMs,
+            confidence: stay.confidence,
+            reason: stay.reason,
+          },
+          "engaged follow-up wait rescheduled",
+        );
+        return;
+      }
+      log.info(
+        {
+          guildId: workspace.guildId,
+          channelId: discordMessage.channelId,
+          messageId: currentMessage.id,
+          pendingMessageIds: batch.messageIds,
+          waitCount: batch.waitCount,
+          confidence: stay.confidence,
+          reason: stay.reason,
+        },
+        "engaged follow-up wait exhausted",
+      );
     }
     if (
       stay.action !== "reply" ||

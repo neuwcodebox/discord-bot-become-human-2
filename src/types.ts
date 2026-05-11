@@ -241,6 +241,7 @@ export type PendingFollowUpBatch = {
   lastMessageAt: string;
   messageIds: string[];
   relatedToBot: boolean;
+  waitCount: number;
 };
 
 export type EngagementDecision = {

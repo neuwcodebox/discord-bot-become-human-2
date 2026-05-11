@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendFollowUpMessage,
   computeFollowUpFlushDelayMs,
+  markFollowUpWait,
   shouldFlushByMessageCount,
 } from "../src/conversation/follow-up-batch.js";
 
@@ -30,6 +31,30 @@ describe("follow-up batching", () => {
     expect(second.since).toBe("2026-05-11T12:00:00.000Z");
     expect(second.lastMessageAt).toBe("2026-05-11T12:00:02.000Z");
     expect(second.relatedToBot).toBe(true);
+    expect(second.waitCount).toBe(0);
+  });
+
+  it("resets wait count when a new human message extends the batch", () => {
+    const waited = markFollowUpWait(
+      {
+        since: "2026-05-11T12:00:00.000Z",
+        lastMessageAt: "2026-05-11T12:00:01.000Z",
+        messageIds: ["m1"],
+        relatedToBot: false,
+        waitCount: 0,
+      },
+      new Date("2026-05-11T12:00:03.000Z"),
+    );
+    const extended = appendFollowUpMessage({
+      batch: waited,
+      messageId: "m2",
+      relatedToBot: false,
+      now: new Date("2026-05-11T12:00:05.000Z"),
+    });
+
+    expect(waited.waitCount).toBe(1);
+    expect(extended.messageIds).toEqual(["m1", "m2"]);
+    expect(extended.waitCount).toBe(0);
   });
 
   it("flushes when the batch reaches the configured message count", () => {
@@ -38,6 +63,7 @@ describe("follow-up batching", () => {
       lastMessageAt: "2026-05-11T12:00:03.000Z",
       messageIds: ["m1", "m2", "m3"],
       relatedToBot: false,
+      waitCount: 0,
     };
 
     expect(shouldFlushByMessageCount(batch, config)).toBe(true);
@@ -49,6 +75,7 @@ describe("follow-up batching", () => {
       lastMessageAt: "2026-05-11T12:00:12.000Z",
       messageIds: ["m1", "m2"],
       relatedToBot: false,
+      waitCount: 0,
     };
 
     const delay = computeFollowUpFlushDelayMs({
@@ -68,6 +95,7 @@ describe("follow-up batching", () => {
       lastMessageAt: "2026-05-11T12:00:01.000Z",
       messageIds: ["m1"],
       relatedToBot: false,
+      waitCount: 0,
     };
 
     const delay = computeFollowUpFlushDelayMs({
@@ -87,6 +115,7 @@ describe("follow-up batching", () => {
       lastMessageAt: "2026-05-11T12:00:01.000Z",
       messageIds: ["m1"],
       relatedToBot: true,
+      waitCount: 0,
     };
 
     const delay = computeFollowUpFlushDelayMs({

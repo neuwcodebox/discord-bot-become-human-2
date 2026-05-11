@@ -217,8 +217,13 @@ function markdownSections(sections: Record<string, string>): string {
 
 function stripRuntimeOnlyState(
   state: ConversationRuntimeState,
-): Omit<ConversationRuntimeState, "pendingTimer"> {
-  const { pendingTimer: _pendingTimer, ...rest } = state;
+): Omit<ConversationRuntimeState, "cooldownUntil" | "pendingFollowUp" | "pendingTimer"> {
+  const {
+    cooldownUntil: _cooldownUntil,
+    pendingFollowUp: _pendingFollowUp,
+    pendingTimer: _pendingTimer,
+    ...rest
+  } = state;
   return rest;
 }
 

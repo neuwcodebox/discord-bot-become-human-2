@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -166,6 +166,67 @@ describe("context builder", () => {
     expect(allContent).toContain("temporary tests");
     expect(allContent).toContain("simple thanks");
     expect(allContent).toContain("transient debugging logs");
+  });
+
+  it("includes capped archive summaries and transcript in response context", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dbh2-context-"));
+    const agentsPath = join(root, "AGENTS.md");
+    await writeFile(agentsPath, "runtime instructions", "utf8");
+    await mkdir(join(root, "memory"), { recursive: true });
+    await writeFile(
+      join(root, "memory", "history.jsonl"),
+      `${JSON.stringify({
+        cursor: 1,
+        time: "2026-05-11T12:00:00.000Z",
+        fromEventCursor: 1,
+        toEventCursor: 10,
+        channelIds: ["c1"],
+        participants: ["u1"],
+        summary: "old useful context",
+        memoryTargets: ["memory/MEMORY.md"],
+      })}\n`,
+      "utf8",
+    );
+    const config = {
+      ...defaultConfig,
+      context: {
+        ...defaultConfig.context,
+        maxTranscriptChars: 180,
+        maxArchiveSummariesInContext: 1,
+      },
+    };
+    const events = Array.from({ length: 8 }, (_, index) => {
+      const message = normalizedMessage(`m${index + 1}`);
+      return {
+        type: "message_create" as const,
+        time: message.createdAt,
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        authorId: message.author.id,
+        payload: { ...message, cleanContent: `latest message ${index} ${"x".repeat(40)}` },
+      };
+    });
+
+    const context = await buildResponseContext({
+      agentsPath,
+      workspaceRoot: root,
+      config,
+      events,
+      targetMessageIds: ["m8"],
+      task: {
+        engage: true,
+        confidence: 1,
+        reason: "direct",
+        targetMessageIds: ["m8"],
+        expectedRole: "answer_question",
+      },
+    });
+    const userMessage = context.find((entry) => entry.role === "user")?.content ?? "";
+
+    expect(userMessage).toContain("Archived Conversation Summaries");
+    expect(userMessage).toContain("old useful context");
+    expect(userMessage).toContain("... (truncated)");
   });
 });
 

@@ -9,6 +9,8 @@ export type AttachmentReadResult = {
   text?: string;
   data?: string;
   truncated?: boolean;
+  bytesRead?: number;
+  limitBytes?: number;
 };
 
 export async function readAttachment(
@@ -27,6 +29,8 @@ export async function readAttachment(
       contentType: attachment.mimeType ?? image.contentType,
       data: image.data,
       truncated: image.truncated,
+      bytesRead: image.bytesRead,
+      limitBytes: image.limitBytes,
     };
   }
   const fetched = await fetchUrl({
@@ -41,6 +45,8 @@ export async function readAttachment(
     ...(fetched.contentType ? { contentType: fetched.contentType } : {}),
     text: fetched.text,
     truncated: fetched.truncated,
+    bytesRead: fetched.bytesRead,
+    limitBytes: fetched.limitBytes,
   };
 }
 
@@ -80,11 +86,11 @@ export async function readAttachmentToolContent(
 async function fetchBinary(
   url: string,
   maxBytes: number,
-): Promise<{ contentType: string; data: string; truncated: boolean }> {
+): Promise<{ contentType: string; data: string; truncated: boolean; bytesRead: number; limitBytes: number }> {
   const response = await fetch(url, { redirect: "follow" });
   const contentType = response.headers.get("content-type") ?? "application/octet-stream";
   const reader = response.body?.getReader();
-  if (!reader) return { contentType, data: "", truncated: false };
+  if (!reader) return { contentType, data: "", truncated: false, bytesRead: 0, limitBytes: maxBytes };
   const chunks: Uint8Array[] = [];
   let size = 0;
   let truncated = false;
@@ -103,5 +109,7 @@ async function fetchBinary(
     contentType,
     data: Buffer.concat(chunks).toString("base64"),
     truncated,
+    bytesRead: size,
+    limitBytes: maxBytes,
   };
 }

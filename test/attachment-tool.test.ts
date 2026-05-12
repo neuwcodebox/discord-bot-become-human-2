@@ -53,4 +53,40 @@ describe("attachment tool", () => {
       },
     ]);
   });
+
+  it("reports truncation metadata for attachment reads", async () => {
+    const cache = new AttachmentCache();
+    cache.remember({
+      id: "m1",
+      guildId: "g",
+      channelId: "c",
+      author: { id: "u", username: "u", displayName: "u", isBot: false },
+      content: "",
+      cleanContent: "",
+      createdAt: "2026-05-10T12:00:00.000Z",
+      mentions: [],
+      attachments: [
+        {
+          id: "a1",
+          url: "https://cdn.example/log.txt",
+          filename: "log.txt",
+          mimeType: "text/plain",
+          size: 10,
+          kind: "file",
+        },
+      ],
+      embeds: [],
+      reactions: [],
+      links: [],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("abcdefghij", { headers: { "content-type": "text/plain" } })),
+    );
+
+    const result = await readAttachmentToolContent(cache, { ref: "attachment://a1", maxBytes: 4 });
+
+    expect(result.details.truncated).toBe(true);
+    expect(result.details.limitBytes).toBe(4);
+  });
 });

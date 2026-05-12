@@ -67,6 +67,19 @@ export type AppConfig = {
     softLimitChars: number;
     hardLimitChars: number;
   };
+  context: {
+    outputReserveTokens: number;
+    safetyBufferTokens: number;
+    maxContextMessageChars: number;
+    maxTranscriptChars: number;
+    maxArchiveSummariesInContext: number;
+    maxArchiveSummaryChars: number;
+    maxMemoryChars: number;
+    maxUserProfileChars: number;
+    maxToolResultChars: number;
+    maxFileReadBytes: number;
+    maxSearchResultChars: number;
+  };
   memory: {
     compaction: {
       enabled: boolean;
@@ -300,6 +313,9 @@ export type HistoryEntry = {
   time: string;
   fromEventCursor: number;
   toEventCursor: number;
+  guildId?: string;
+  channelIds?: string[];
+  threadIds?: string[];
   participants: string[];
   summary: string;
   memoryTargets: string[];

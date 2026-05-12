@@ -283,6 +283,19 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
     "softLimitChars": 1800,
     "hardLimitChars": 1950
   },
+  "context": {
+    "outputReserveTokens": 16000,
+    "safetyBufferTokens": 2048,
+    "maxContextMessageChars": 96000,
+    "maxTranscriptChars": 64000,
+    "maxArchiveSummariesInContext": 8,
+    "maxArchiveSummaryChars": 12000,
+    "maxMemoryChars": 32000,
+    "maxUserProfileChars": 16000,
+    "maxToolResultChars": 16000,
+    "maxFileReadBytes": 131072,
+    "maxSearchResultChars": 2000
+  },
   "memory": {
     "compaction": {
       "enabled": true,
@@ -825,7 +838,10 @@ server relationship, preferences, important past context, things to avoid, notes
 
 ### 9.3 compaction
 
-최근 event가 충분히 쌓였거나 대화 단위가 끝나면 오래된 안전 구간을 압축하여 `history.jsonl`에 append한다.
+최근 event가 충분히 쌓였거나 대화 단위가 끝나면 오래된 안전 구간을 LLM 요약으로 압축하여
+`history.jsonl`에 append한다. 요약 LLM 호출이 실패하거나 빈 결과를 반환하면 `[RAW]` fallback summary를
+저장한다. 최근 `conversation.maxRecentMessages` 범위는 live transcript로 유지하고, 오래된 prefix만
+archive 대상으로 삼는다.
 
 예시:
 
@@ -835,6 +851,8 @@ server relationship, preferences, important past context, things to avoid, notes
   "time": "2026-05-10T22:10:00+09:00",
   "fromEventCursor": 100,
   "toEventCursor": 128,
+  "guildId": "1000",
+  "channelIds": ["2000"],
   "participants": ["1234", "5678"],
   "summary": "서버 멤버들이 새 Discord AI bot 구조를 논의했다. 핵심은 guild별 workspace, 사용자별 USER.md, Dream 기반 장기 기억 관리였다.",
   "memoryTargets": [
@@ -1290,6 +1308,12 @@ engaged 상태의 억제 원칙:
 ## 15. LLM 호출 종류
 
 LLM 호출은 목적별로 context 구성을 다르게 한다.
+
+모든 LLM 호출은 `context` 설정을 적용한다. 런타임은 모델의 `contextWindow`에서
+`outputReserveTokens`와 `safetyBufferTokens`를 뺀 값을 입력 예산으로 보고, tokenizer dependency 없이
+보수적 문자 기반 추정으로 context message를 제한한다. 개별 context message, transcript, memory,
+archive summary, user profile, tool result는 설정된 char/byte limit을 넘으면 잘라내고 truncation metadata를
+tool details 또는 로그 가능한 metadata로 남긴다.
 
 ### 15.1 engagement decision
 

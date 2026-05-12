@@ -13,4 +13,15 @@ describe("config parsing", () => {
       defaultConfig.conversation.engaged.followUpBatch,
     );
   });
+
+  it("fills context defaults for existing config files", () => {
+    const input = structuredClone(defaultConfig);
+    delete (input as Partial<AppConfig>).context;
+
+    const parsed = parseConfig(input);
+
+    expect(parsed.context.outputReserveTokens).toBe(16_000);
+    expect(parsed.context.maxToolResultChars).toBe(16_000);
+    expect(parsed.context.maxFileReadBytes).toBe(131_072);
+  });
 });

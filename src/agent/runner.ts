@@ -1,6 +1,7 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AfterToolCallResult, AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { getModels, registerBuiltInApiProviders } from "@earendil-works/pi-ai";
+import { normalizeContextMessages, truncateText } from "../context/limits.js";
 import { childLogger } from "../logger.js";
 import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
 import { loadCodexCredentials } from "./provider.js";
@@ -19,6 +20,7 @@ export class PiCodexAgentRunner implements AgentRunner {
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     const startedAt = Date.now();
     const model = resolveModel(this.config);
+    const messages = normalizeContextMessages(request.messages, this.config, model.contextWindow);
     const credentials = await loadCodexCredentials(this.config);
     if (!credentials.apiKey) {
       throw new Error(
@@ -26,11 +28,11 @@ export class PiCodexAgentRunner implements AgentRunner {
       );
     }
 
-    const systemPrompt = request.messages
+    const normalizedSystemPrompt = messages
       .filter((message) => message.role === "system" || message.role === "developer")
       .map((message) => message.content)
       .join("\n\n");
-    const prompts: AgentMessage[] = request.messages
+    const prompts: AgentMessage[] = messages
       .filter((message) => message.role === "user")
       .map((message) => ({
         role: "user",
@@ -41,20 +43,23 @@ export class PiCodexAgentRunner implements AgentRunner {
     const agent = new Agent({
       sessionId: request.sessionId,
       initialState: {
-        systemPrompt,
+        systemPrompt: normalizedSystemPrompt,
         model,
         thinkingLevel: this.config.llm.reasoning,
         tools: request.tools ?? [],
       },
       getApiKey: async () => credentials.apiKey,
       transport: this.config.llm.codex.transport === "websocket" ? "websocket" : "auto",
+      afterToolCall: async (context) =>
+        normalizeToolResult(context.result, this.config.context.maxToolResultChars),
     });
     log.info(
       {
         sessionId: request.sessionId,
         model: model.id,
         reasoning: this.config.llm.reasoning,
-        messageCount: request.messages.length,
+        messageCount: messages.length,
+        estimatedContextWindow: model.contextWindow,
         toolCount: request.tools?.length ?? 0,
         streaming: Boolean(request.onTextDelta),
       },
@@ -119,6 +124,30 @@ export class PiCodexAgentRunner implements AgentRunner {
       messages: agent.state.messages,
     };
   }
+}
+
+function normalizeToolResult(
+  result: AgentToolResult<unknown>,
+  maxChars: number,
+): AfterToolCallResult | undefined {
+  let changed = false;
+  const content = result.content.map((part) => {
+    if (part.type !== "text" || typeof part.text !== "string") return part;
+    const capped = truncateText(part.text, maxChars);
+    if (!capped.truncated) return part;
+    changed = true;
+    return { ...part, text: capped.text };
+  });
+  if (!changed) return undefined;
+  return {
+    content,
+    details: {
+      originalDetails: result.details,
+      truncated: true,
+      limitChars: maxChars,
+    },
+    ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
+  };
 }
 
 export class StaticAgentRunner implements AgentRunner {

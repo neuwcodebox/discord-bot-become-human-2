@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -26,5 +26,37 @@ describe("tool registry", () => {
     await expect(
       write?.execute("call-2", { path: "memory/MEMORY.md", contents: "yes" }),
     ).resolves.toMatchObject({ details: { text: expect.stringContaining("MEMORY.md") } });
+  });
+
+  it("limits workspace read and search tool output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dbh2-tools-"));
+    await writeFile(join(root, "big.txt"), `needle ${"x".repeat(100)}`, "utf8");
+    const config = {
+      ...defaultConfig,
+      context: {
+        ...defaultConfig.context,
+        maxFileReadBytes: 16,
+        maxSearchResultChars: 20,
+      },
+    };
+    const tools = createToolRegistry(config, { guildId: "g", workspaceRoot: root });
+    const read = tools.find((tool) => tool.name === "workspace_read");
+    const search = tools.find((tool) => tool.name === "workspace_search");
+
+    const readResult = await read?.execute("call-read", { path: "big.txt" });
+    const readDetails = JSON.parse(
+      readResult?.content[0]?.type === "text" ? readResult.content[0].text : "{}",
+    ) as {
+      truncated?: boolean;
+      limitBytes?: number;
+    };
+    expect(readDetails.truncated).toBe(true);
+    expect(readDetails.limitBytes).toBe(16);
+
+    const searchResult = await search?.execute("call-search", { query: "needle" });
+    const searchDetails = JSON.parse(
+      searchResult?.content[0]?.type === "text" ? searchResult.content[0].text : "[]",
+    ) as Array<{ text: string }>;
+    expect(searchDetails[0]?.text).toContain("... (truncated)");
   });
 });

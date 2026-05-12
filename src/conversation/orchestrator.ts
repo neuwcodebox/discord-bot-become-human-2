@@ -5,7 +5,7 @@ import { AttachmentCache } from "../discord/attachment-cache.js";
 import { sendDiscordMessage } from "../discord/sender.js";
 import { DiscordStreamingWriter } from "../discord/streaming-writer.js";
 import { childLogger } from "../logger.js";
-import { MemoryCompactor } from "../memory/compactor.js";
+import { buildCompactionSummaryContext, MemoryCompactor } from "../memory/compactor.js";
 import { DreamScheduler } from "../memory/dream-scheduler.js";
 import { EventLog } from "../memory/event-log.js";
 import { createDiscordActionRuntimeFromMessage } from "../tools/discord-actions.js";
@@ -82,7 +82,14 @@ export class ConversationOrchestrator {
       "conversation message received",
     );
     this.dreamScheduler.startForGuild(workspace);
-    const compacted = await new MemoryCompactor(workspace.workspaceRoot, this.config).compactIfNeeded();
+    const compacted = await new MemoryCompactor(workspace.workspaceRoot, this.config, async (events) => {
+      const result = await this.runner.run({
+        sessionId: `compact:${workspace.guildId}`,
+        messages: buildCompactionSummaryContext(events),
+        allowEmptyText: false,
+      });
+      return result.text;
+    }).compactIfNeeded();
     if (compacted && this.config.memory.dream.runOnCompaction) {
       log.info({ guildId: workspace.guildId, reason: "compaction" }, "dream run triggered");
       await this.dreamScheduler.runNow(workspace, "compaction");

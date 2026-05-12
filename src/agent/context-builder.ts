@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { truncateText } from "../context/limits.js";
 import { buildTranscript, materializeMessages } from "../conversation/transcript-builder.js";
 import type {
   AgentContextMessage,
@@ -11,7 +12,7 @@ import type {
   NormalizedDiscordMessage,
   StayDecision,
 } from "../types.js";
-import { loadMemory, loadWorkspaceDocuments } from "./memory-loader.js";
+import { loadMemory, loadRecentArchiveSummaries, loadWorkspaceDocuments } from "./memory-loader.js";
 import { SkillLoader } from "./skill-loader.js";
 import { loadRelevantUserProfiles } from "./user-profile-loader.js";
 
@@ -107,10 +108,15 @@ export async function buildResponseContext(input: {
 }): Promise<AgentContextMessage[]> {
   const messages = materializeMessages(input.events);
   const latest = messages.at(-1);
-  const [agents, docs, memory, skills, profiles] = await Promise.all([
+  const [agents, docs, memory, archiveSummaries, skills, profiles] = await Promise.all([
     readFile(input.agentsPath, "utf8"),
     loadWorkspaceDocuments(input.workspaceRoot),
     loadMemory(input.workspaceRoot),
+    loadRecentArchiveSummaries({
+      workspaceRoot: input.workspaceRoot,
+      config: input.config,
+      ...(latest?.channelId ? { channelId: latest.channelId } : {}),
+    }),
     new SkillLoader(input.workspaceRoot).load(input.skillNames ?? inferSkills(input.task)),
     loadRelevantUserProfiles(
       input.workspaceRoot,
@@ -124,6 +130,7 @@ export async function buildResponseContext(input: {
     channelId: latest?.channelId ?? "unknown",
     targetMessageIds: input.targetMessageIds,
   });
+  const cappedTranscript = truncateText(transcript, input.config.context.maxTranscriptChars).text;
   return [
     {
       role: "system",
@@ -145,11 +152,15 @@ export async function buildResponseContext(input: {
     {
       role: "user",
       content: markdownSections({
-        "Guild Memory": memory.guildMemory,
+        "Guild Memory": truncateText(memory.guildMemory, input.config.context.maxMemoryChars).text,
+        "Archived Conversation Summaries": archiveSummaries,
         "Relevant User Profiles": profiles
-          .map((profile) => `## ${profile.userId}\n${profile.profile}`)
+          .map(
+            (profile) =>
+              `## ${profile.userId}\n${truncateText(profile.profile, input.config.context.maxUserProfileChars).text}`,
+          )
           .join("\n\n"),
-        "Observed Discord Transcript": transcript,
+        "Observed Discord Transcript": cappedTranscript,
       }),
     },
   ];

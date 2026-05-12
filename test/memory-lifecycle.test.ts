@@ -60,6 +60,55 @@ describe("memory lifecycle", () => {
     expect(entry?.memoryTargets).toContain("users/human-1/USER.md");
     expect(entry?.memoryTargets).not.toContain("users/bot-1/USER.md");
   });
+
+  it("uses an injected summary generator for compacted archive entries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dbh2-memory-"));
+    const log = new EventLog(root);
+    const config = {
+      ...defaultConfig,
+      memory: {
+        ...defaultConfig.memory,
+        compaction: { enabled: true, maxEventsBeforeCompaction: 3, minEventsPerSummary: 2 },
+      },
+      conversation: { ...defaultConfig.conversation, maxRecentMessages: 1 },
+    };
+
+    await log.append(messageEvent("m1", "u1", "first"));
+    await log.append(messageEvent("m2", "u2", "second"));
+    await log.append(messageEvent("m3", "u1", "third"));
+
+    const entry = await new MemoryCompactor(root, config, async (events) => {
+      expect(events).toHaveLength(2);
+      return "LLM archive summary";
+    }).compactIfNeeded();
+
+    expect(entry?.summary).toBe("LLM archive summary");
+    expect(entry?.channelIds).toEqual(["c"]);
+  });
+
+  it("falls back to raw archive summary when compaction summarization fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dbh2-memory-"));
+    const log = new EventLog(root);
+    const config = {
+      ...defaultConfig,
+      memory: {
+        ...defaultConfig.memory,
+        compaction: { enabled: true, maxEventsBeforeCompaction: 3, minEventsPerSummary: 2 },
+      },
+      conversation: { ...defaultConfig.conversation, maxRecentMessages: 1 },
+    };
+
+    await log.append(messageEvent("m1", "u1", "first"));
+    await log.append(messageEvent("m2", "u2", "second"));
+    await log.append(messageEvent("m3", "u1", "third"));
+
+    const entry = await new MemoryCompactor(root, config, async () => {
+      throw new Error("LLM unavailable");
+    }).compactIfNeeded();
+
+    expect(entry?.summary).toContain("[RAW] 2 events");
+    await expect(readFile(join(root, "memory", ".cursor"), "utf8")).resolves.toBe("2\n");
+  });
 });
 
 function messageEvent(

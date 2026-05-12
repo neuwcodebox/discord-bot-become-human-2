@@ -18,4 +18,22 @@ describe("fetch url tool", () => {
       /Unsupported content-type/,
     );
   });
+
+  it("reports truncation metadata when text exceeds max bytes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("abcdefghij", {
+            headers: { "content-type": "text/plain" },
+          }),
+      ),
+    );
+
+    const result = await fetchUrl({ url: "https://example.com/large.txt", maxBytes: 4 });
+
+    expect(result.truncated).toBe(true);
+    expect(result.bytesRead).toBeGreaterThan(result.limitBytes);
+    expect(result.limitBytes).toBe(4);
+  });
 });

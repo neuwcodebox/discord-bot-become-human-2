@@ -1,11 +1,7 @@
 import type { AppConfig, ToolContext } from "../types.js";
 import { runBwrap } from "./bwrap.js";
 
-export async function sandboxExec(
-  context: ToolContext,
-  config: AppConfig,
-  input: { argv: string[] },
-): Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+export async function sandboxExec(context: ToolContext, config: AppConfig, input: { argv: string[] }) {
   if (!config.sandbox.enabled) throw new Error("sandbox_exec is disabled by config.");
   return runBwrap({
     workspaceRoot: context.workspaceRoot,

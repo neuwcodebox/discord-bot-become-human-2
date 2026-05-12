@@ -73,6 +73,33 @@ const configSchema: z.ZodType<AppConfig> = z.object({
     softLimitChars: z.number().int().positive(),
     hardLimitChars: z.number().int().positive(),
   }),
+  context: z
+    .object({
+      outputReserveTokens: z.number().int().positive(),
+      safetyBufferTokens: z.number().int().nonnegative(),
+      maxContextMessageChars: z.number().int().positive(),
+      maxTranscriptChars: z.number().int().positive(),
+      maxArchiveSummariesInContext: z.number().int().nonnegative(),
+      maxArchiveSummaryChars: z.number().int().positive(),
+      maxMemoryChars: z.number().int().positive(),
+      maxUserProfileChars: z.number().int().positive(),
+      maxToolResultChars: z.number().int().positive(),
+      maxFileReadBytes: z.number().int().positive(),
+      maxSearchResultChars: z.number().int().positive(),
+    })
+    .default({
+      outputReserveTokens: 16_000,
+      safetyBufferTokens: 2_048,
+      maxContextMessageChars: 96_000,
+      maxTranscriptChars: 64_000,
+      maxArchiveSummariesInContext: 8,
+      maxArchiveSummaryChars: 12_000,
+      maxMemoryChars: 32_000,
+      maxUserProfileChars: 16_000,
+      maxToolResultChars: 16_000,
+      maxFileReadBytes: 131_072,
+      maxSearchResultChars: 2_000,
+    }),
   memory: z.object({
     compaction: z.object({
       enabled: z.boolean(),
@@ -162,6 +189,19 @@ export const defaultConfig: AppConfig = {
     editIntervalMs: 1000,
     softLimitChars: 1800,
     hardLimitChars: 1950,
+  },
+  context: {
+    outputReserveTokens: 16_000,
+    safetyBufferTokens: 2_048,
+    maxContextMessageChars: 96_000,
+    maxTranscriptChars: 64_000,
+    maxArchiveSummariesInContext: 8,
+    maxArchiveSummaryChars: 12_000,
+    maxMemoryChars: 32_000,
+    maxUserProfileChars: 16_000,
+    maxToolResultChars: 16_000,
+    maxFileReadBytes: 131_072,
+    maxSearchResultChars: 2_000,
   },
   memory: {
     compaction: {

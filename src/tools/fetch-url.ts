@@ -3,7 +3,14 @@ export async function fetchUrl(input: {
   timeoutMs?: number;
   maxBytes?: number;
   allowedContentTypes?: string[];
-}): Promise<{ url: string; contentType: string; text: string; truncated: boolean }> {
+}): Promise<{
+  url: string;
+  contentType: string;
+  text: string;
+  truncated: boolean;
+  bytesRead: number;
+  limitBytes: number;
+}> {
   const timeoutMs = input.timeoutMs ?? 10_000;
   const maxBytes = input.maxBytes ?? 262_144;
   const controller = new AbortController();
@@ -22,7 +29,16 @@ export async function fetchUrl(input: {
       throw new Error(`Unsupported content-type: ${contentType}`);
     }
     const reader = response.body?.getReader();
-    if (!reader) return { url: response.url, contentType, text: "", truncated: false };
+    if (!reader) {
+      return {
+        url: response.url,
+        contentType,
+        text: "",
+        truncated: false,
+        bytesRead: 0,
+        limitBytes: maxBytes,
+      };
+    }
     const chunks: Uint8Array[] = [];
     let size = 0;
     let truncated = false;
@@ -38,7 +54,7 @@ export async function fetchUrl(input: {
       chunks.push(value);
     }
     const text = new TextDecoder().decode(Buffer.concat(chunks));
-    return { url: response.url, contentType, text, truncated };
+    return { url: response.url, contentType, text, truncated, bytesRead: size, limitBytes: maxBytes };
   } finally {
     clearTimeout(timeout);
   }

@@ -31,7 +31,9 @@ export function createToolRegistry(
       description: "Read a UTF-8 text file inside the current guild workspace.",
       parameters: Type.Object({ path: Type.String() }),
       execute: async (_toolCallId, params) => {
-        return textResult(await workspaceRead(context, params.path));
+        return jsonResult(
+          await workspaceRead(context, params.path, { maxBytes: config.context.maxFileReadBytes }),
+        );
       },
     });
     addTool(tools, {
@@ -54,7 +56,9 @@ export function createToolRegistry(
           await workspaceSearch(
             context,
             params.query,
-            params.maxResults === undefined ? {} : { maxResults: params.maxResults },
+            params.maxResults === undefined
+              ? { maxResultChars: config.context.maxSearchResultChars }
+              : { maxResults: params.maxResults, maxResultChars: config.context.maxSearchResultChars },
           ),
         );
       },
@@ -112,7 +116,7 @@ export function createToolRegistry(
       description: "Fetch a URL with timeout, content-type, and size limits.",
       parameters: Type.Object({ url: Type.String() }),
       execute: async (_toolCallId, params) => {
-        return jsonResult(await fetchUrl({ url: params.url }));
+        return jsonResult(await fetchUrl({ url: params.url, maxBytes: config.context.maxFileReadBytes }));
       },
     });
   }
@@ -124,7 +128,10 @@ export function createToolRegistry(
       description: "Read an attachment through its attachment:// reference.",
       parameters: Type.Object({ ref: Type.String(), maxBytes: Type.Optional(Type.Number()) }),
       execute: async (_toolCallId, params) => {
-        return readAttachmentToolContent(attachmentCache, params);
+        return readAttachmentToolContent(attachmentCache, {
+          ...params,
+          maxBytes: params.maxBytes ?? config.context.maxFileReadBytes,
+        });
       },
     });
   }

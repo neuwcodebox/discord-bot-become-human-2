@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
+import { truncateUtf8 } from "../context/limits.js";
 
 export async function hasBwrap(): Promise<boolean> {
   const path = "/usr/bin/bwrap";
@@ -18,7 +19,15 @@ export async function runBwrap(input: {
   timeoutMs: number;
   outputLimitBytes: number;
   network: boolean;
-}): Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+}): Promise<{
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  outputLimitBytes: number;
+}> {
   if (!(await hasBwrap())) throw new Error("sandbox_exec is unavailable because bwrap is not installed.");
   if (input.argv.length === 0) throw new Error("argv must not be empty.");
   const args = [
@@ -54,21 +63,35 @@ function runProcess(
   args: string[],
   timeoutMs: number,
   outputLimitBytes: number,
-): Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+): Promise<{
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  outputLimitBytes: number;
+}> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
     let timedOut = false;
     const timeout = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
     }, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout = capString(stdout + chunk.toString("utf8"), outputLimitBytes);
+      const capped = truncateUtf8(stdout + chunk.toString("utf8"), outputLimitBytes);
+      stdout = capped.text;
+      stdoutTruncated ||= capped.truncated;
     });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr = capString(stderr + chunk.toString("utf8"), outputLimitBytes);
+      const capped = truncateUtf8(stderr + chunk.toString("utf8"), outputLimitBytes);
+      stderr = capped.text;
+      stderrTruncated ||= capped.truncated;
     });
     child.on("error", reject);
     child.on("close", (exitCode) => {
@@ -78,11 +101,11 @@ function runProcess(
         stdout,
         stderr,
         timedOut,
+        stdoutTruncated,
+        stderrTruncated,
+        outputLimitBytes,
       });
     });
   });
 }
 
-function capString(value: string, limit: number): string {
-  return Buffer.byteLength(value, "utf8") <= limit ? value : value.slice(0, limit);
-}

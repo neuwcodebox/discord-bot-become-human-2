@@ -2,6 +2,7 @@ import type { Message } from "discord.js";
 import { buildReactionContext, buildResponseContext } from "../agent/context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
 import { AttachmentCache } from "../discord/attachment-cache.js";
+import { sendDiscordMessage } from "../discord/sender.js";
 import { DiscordStreamingWriter } from "../discord/streaming-writer.js";
 import { childLogger } from "../logger.js";
 import { MemoryCompactor } from "../memory/compactor.js";
@@ -504,9 +505,8 @@ export class ConversationOrchestrator {
         discordMessage,
         streaming: false,
       });
-      const sent = await discordMessage.reply({
-        content: replyTextOrFallback(finalResult.text),
-        allowedMentions: { parse: [], repliedUser: false },
+      const sent = await sendDiscordMessage(discordMessage.channel, replyTextOrFallback(finalResult.text), {
+        replyTo: discordMessage,
       });
       noteBotReply(this.config, state, sent.id);
       log.info(

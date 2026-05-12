@@ -1625,6 +1625,11 @@ type StreamingSegment = {
 
 긴 응답은 최종화 시점까지 기다리지 않고, 스트리밍 중간에 새 Discord 메시지를 열어 계속 이어간다.
 
+봇의 텍스트 응답은 기본적으로 Discord reply가 아니라 일반 채널 메시지로 보낸다. 답변 대상 메시지 이후에
+새 Discord 메시지가 2개 이상 있을 때만 문맥 보존을 위해 대상 메시지에 reply한다. 바로 전 메시지나
+대상 이후 새 메시지가 1개뿐인 경우에는 reply하지 않는다. 스트리밍 응답에서는 첫 placeholder 메시지에만
+이 기준을 적용하고, 긴 응답의 continuation segment는 일반 채널 메시지로 이어 보낸다.
+
 메시지 전송/수정 시 `allowed_mentions`를 명시적으로 설정한다. 기본값은 `@everyone`, role mention, 불필요한 user mention을 발생시키지 않는 방향이다.
 
 ---

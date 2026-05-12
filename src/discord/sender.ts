@@ -1,5 +1,7 @@
 import type { Message, MessageMentionOptions, TextBasedChannel } from "discord.js";
 
+const replyNewerMessageThreshold = 2;
+
 export const safeAllowedMentions: MessageMentionOptions = {
   parse: [],
   repliedUser: false,
@@ -10,7 +12,7 @@ export async function sendDiscordMessage(
   content: string,
   options: { replyTo?: Message<boolean> } = {},
 ): Promise<Message<boolean>> {
-  if (options.replyTo) {
+  if (options.replyTo && (await shouldReplyToMessage(options.replyTo))) {
     return options.replyTo.reply({
       content,
       allowedMentions: safeAllowedMentions,
@@ -27,6 +29,18 @@ export async function sendDiscordMessage(
     content,
     allowedMentions: safeAllowedMentions,
   });
+}
+
+export async function shouldReplyToMessage(message: Message<boolean>): Promise<boolean> {
+  try {
+    const newerMessages = await message.channel.messages.fetch({
+      after: message.id,
+      limit: replyNewerMessageThreshold,
+    });
+    return newerMessages.size >= replyNewerMessageThreshold;
+  } catch {
+    return false;
+  }
 }
 
 export async function editOwnMessage(message: Message<boolean>, content: string): Promise<Message<boolean>> {

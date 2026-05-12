@@ -322,7 +322,7 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
 
 `allowedGuildIds`와 `allowedChannelIds`가 비어 있으면 봇이 접근 가능한 guild/channel에서 동작한다. 실제 운영에서 제한하려면 배열에 ID를 넣는다.
 
-Discord token은 `config.json`에 직접 저장하지 않고 `discord.tokenEnv`가 가리키는 환경변수에서 읽는다. Codex auth는 `llm.codex.authPath`에서 읽는다. Codex 로그인은 프로젝트 루트에서 `npm run login:codex`로 수행하며, 이 스크립트는 `@earendil-works/pi-ai/oauth`의 `loginOpenAICodex()`를 호출하고 반환된 OAuth credential을 `llm.codex.authPath`에 저장한다. 현재 작업 디렉터리의 `auth.json`은 읽지 않는다.
+Discord token은 `config.json`에 직접 저장하지 않고 `discord.tokenEnv`가 가리키는 환경변수에서 읽는다. 앱 시작과 `npm run login:codex`는 프로젝트 루트의 `.env`를 먼저 로드한다. 이미 설정된 프로세스 환경변수는 `.env` 값으로 덮어쓰지 않는다. Codex auth는 `llm.codex.authPath`에서 읽는다. Codex 로그인은 프로젝트 루트에서 `npm run login:codex`로 수행하며, 이 스크립트는 `@earendil-works/pi-ai/oauth`의 `loginOpenAICodex()`를 호출하고 반환된 OAuth credential을 `llm.codex.authPath`에 저장한다. 현재 작업 디렉터리의 `auth.json`은 읽지 않는다.
 
 런타임 로그는 `pino`를 사용한다. 기본 콘솔 출력은 `pino-pretty`로 사람이 읽기 좋게 표시하고,
 `LOG_FORMAT=json`을 설정하면 JSON 로그를 출력한다. 로그 레벨은 `LOG_LEVEL` 또는 `BOT_LOG_LEVEL`

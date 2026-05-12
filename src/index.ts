@@ -1,3 +1,4 @@
+import "./bootstrap-env.js";
 import { PiCodexAgentRunner } from "./agent/runner.js";
 import { loadOrCreateConfig } from "./config.js";
 import { ConversationOrchestrator } from "./conversation/orchestrator.js";

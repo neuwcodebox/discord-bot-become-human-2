@@ -17,6 +17,7 @@ export class ConversationStateStore {
       humanMessagesSinceLastBot: 0,
       unrelatedHumanMessagesSinceLastBot: 0,
       ambientReplyTimes: [],
+      processingChain: Promise.resolve(),
     };
     this.states.set(id, created);
     return created;

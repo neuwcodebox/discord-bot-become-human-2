@@ -1,4 +1,4 @@
-import type { Message } from "discord.js";
+import type { Message, TextBasedChannel } from "discord.js";
 import { buildReactionContext, buildResponseContext } from "../agent/context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
 import { AttachmentCache } from "../discord/attachment-cache.js";
@@ -57,8 +57,6 @@ export class ConversationOrchestrator {
   ): Promise<void> {
     const message = event.payload;
     this.attachmentCache.remember(message);
-    const id = conversationId(message);
-    const state = this.states.get(id);
     if (message.author.isBot) {
       log.debug(
         { guildId: event.guildId, channelId: event.channelId, messageId: event.messageId },
@@ -66,6 +64,30 @@ export class ConversationOrchestrator {
       );
       return;
     }
+    const id = conversationId(message);
+    const state = this.states.get(id);
+    // Serialize per-channel: append to the promise chain so only one processMessage
+    // runs at a time per conversation, preventing parallel LLM calls and duplicate replies.
+    const tail = (state.processingChain ?? Promise.resolve())
+      .then(() => this._processMessage(event, workspace, discordMessage))
+      .catch((err: unknown) => {
+        log.error(
+          { err, guildId: event.guildId, channelId: event.channelId, messageId: event.messageId },
+          "message processing failed",
+        );
+      });
+    state.processingChain = tail;
+    await tail;
+  }
+
+  private async _processMessage(
+    event: Extract<NormalizedDiscordEvent, { type: "message_create" }>,
+    workspace: GuildWorkspace,
+    discordMessage?: Message<boolean>,
+  ): Promise<void> {
+    const message = event.payload;
+    const id = conversationId(message);
+    const state = this.states.get(id);
 
     const relatedToBot = this.isStrongTrigger(message);
     const previousLastHumanAt = state.lastHumanMessageAt;
@@ -200,14 +222,16 @@ export class ConversationOrchestrator {
     }
 
     input.state.pendingTimer = setTimeout(() => {
-      void this.flushEngagedFollowUp(input.conversationKey, input.workspace, input.discordMessage).catch(
-        (error) => {
+      const state = this.states.get(input.conversationKey);
+      const tail = (state.processingChain ?? Promise.resolve())
+        .then(() => this.flushEngagedFollowUp(input.conversationKey, input.workspace, input.discordMessage))
+        .catch((error: unknown) => {
           log.error(
             { err: error, guildId: input.workspace.guildId, channelId: input.message.channelId },
             "engaged follow-up flush failed",
           );
-        },
-      );
+        });
+      state.processingChain = tail;
     }, delayMs);
     input.state.pendingTimer.unref();
   }
@@ -307,12 +331,16 @@ export class ConversationOrchestrator {
         );
         state.pendingFollowUp = waitBatch;
         state.pendingTimer = setTimeout(() => {
-          void this.flushEngagedFollowUp(conversationKey, workspace, discordMessage).catch((error) => {
-            log.error(
-              { err: error, guildId: workspace.guildId, channelId: discordMessage.channelId },
-              "engaged follow-up wait retry failed",
-            );
-          });
+          const currentState = this.states.get(conversationKey);
+          const tail = (currentState.processingChain ?? Promise.resolve())
+            .then(() => this.flushEngagedFollowUp(conversationKey, workspace, discordMessage))
+            .catch((error: unknown) => {
+              log.error(
+                { err: error, guildId: workspace.guildId, channelId: discordMessage.channelId },
+                "engaged follow-up wait retry failed",
+              );
+            });
+          currentState.processingChain = tail;
         }, delayMs);
         state.pendingTimer.unref();
         log.info(
@@ -430,6 +458,15 @@ export class ConversationOrchestrator {
     return decision;
   }
 
+  private startTypingKeepAlive(channel: TextBasedChannel): () => void {
+    if (!channel.isSendable()) return () => {};
+    void channel.sendTyping().catch(() => {});
+    const timer = setInterval(() => {
+      void channel.sendTyping().catch(() => {});
+    }, 8000);
+    return () => clearInterval(timer);
+  }
+
   private async reply(
     task: Parameters<typeof buildResponseContext>[0]["task"],
     events: NormalizedDiscordEvent[],
@@ -451,6 +488,7 @@ export class ConversationOrchestrator {
       },
       "agent reply started",
     );
+    const stopTyping = this.startTypingKeepAlive(discordMessage.channel);
     const context = await buildResponseContext({
       agentsPath: this.agentsPath,
       workspaceRoot: workspace.workspaceRoot,
@@ -469,64 +507,69 @@ export class ConversationOrchestrator {
       attachmentCache: this.attachmentCache,
       discordActions: createDiscordActionRuntimeFromMessage(discordMessage, toolContext),
     });
-    if (this.config.streaming.enabled && this.config.discord.enableMessageEditStreaming) {
-      const writer = new DiscordStreamingWriter(discordMessage.channel, this.config, discordMessage);
-      await writer.start();
-      const result = await this.runner.run({
-        sessionId: `discord:${workspace.guildId}:${discordMessage.channelId}`,
-        messages: context,
-        tools,
-        onTextDelta: (delta) => writer.append(delta),
-      });
-      const finalResult = await this.retryEmptyReply({
-        result,
-        context,
-        workspace,
-        discordMessage,
-        streaming: true,
-        onTextDelta: (delta) => writer.append(delta),
-      });
-      const sent = await writer.finish(replyTextOrFallback(finalResult.text));
-      if (sent) noteBotReply(this.config, state, sent.id);
-      log.info(
-        {
-          guildId: workspace.guildId,
-          channelId: discordMessage.channelId,
-          messageId: sent?.id,
+    try {
+      if (this.config.streaming.enabled && this.config.discord.enableMessageEditStreaming) {
+        const writer = new DiscordStreamingWriter(discordMessage.channel, this.config, discordMessage);
+        await writer.start();
+        stopTyping(); // placeholder message is now visible; typing indicator no longer needed
+        const result = await this.runner.run({
+          sessionId: `discord:${workspace.guildId}:${discordMessage.channelId}`,
+          messages: context,
+          tools,
+          onTextDelta: (delta) => writer.append(delta),
+        });
+        const finalResult = await this.retryEmptyReply({
+          result,
+          context,
+          workspace,
+          discordMessage,
           streaming: true,
-          durationMs: Date.now() - startedAt,
-          outputLength: finalResult.text.length,
-        },
-        "agent reply completed",
-      );
-    } else {
-      const result = await this.runner.run({
-        sessionId: `discord:${workspace.guildId}:${discordMessage.channelId}`,
-        messages: context,
-        tools,
-      });
-      const finalResult = await this.retryEmptyReply({
-        result,
-        context,
-        workspace,
-        discordMessage,
-        streaming: false,
-      });
-      const sent = await sendDiscordMessage(discordMessage.channel, replyTextOrFallback(finalResult.text), {
-        replyTo: discordMessage,
-      });
-      noteBotReply(this.config, state, sent.id);
-      log.info(
-        {
-          guildId: workspace.guildId,
-          channelId: discordMessage.channelId,
-          messageId: sent.id,
+          onTextDelta: (delta) => writer.append(delta),
+        });
+        const sent = await writer.finish(replyTextOrFallback(finalResult.text));
+        if (sent) noteBotReply(this.config, state, sent.id);
+        log.info(
+          {
+            guildId: workspace.guildId,
+            channelId: discordMessage.channelId,
+            messageId: sent?.id,
+            streaming: true,
+            durationMs: Date.now() - startedAt,
+            outputLength: finalResult.text.length,
+          },
+          "agent reply completed",
+        );
+      } else {
+        const result = await this.runner.run({
+          sessionId: `discord:${workspace.guildId}:${discordMessage.channelId}`,
+          messages: context,
+          tools,
+        });
+        const finalResult = await this.retryEmptyReply({
+          result,
+          context,
+          workspace,
+          discordMessage,
           streaming: false,
-          durationMs: Date.now() - startedAt,
-          outputLength: finalResult.text.length,
-        },
-        "agent reply completed",
-      );
+        });
+        const sent = await sendDiscordMessage(discordMessage.channel, replyTextOrFallback(finalResult.text), {
+          replyTo: discordMessage,
+        });
+        noteBotReply(this.config, state, sent.id);
+        log.info(
+          {
+            guildId: workspace.guildId,
+            channelId: discordMessage.channelId,
+            messageId: sent.id,
+            streaming: false,
+            durationMs: Date.now() - startedAt,
+            outputLength: finalResult.text.length,
+          },
+          "agent reply completed",
+        );
+      }
+    } finally {
+      stopTyping();
     }
   }
 

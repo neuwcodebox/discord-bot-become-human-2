@@ -247,6 +247,7 @@ export type ConversationRuntimeState = {
   pendingTimer?: NodeJS.Timeout;
   pendingFollowUp?: PendingFollowUpBatch;
   ambientReplyTimes: string[];
+  processingChain?: Promise<void>;
 };
 
 export type PendingFollowUpBatch = {

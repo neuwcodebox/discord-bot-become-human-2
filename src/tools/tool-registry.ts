@@ -8,9 +8,9 @@ import type { DiscordActionRuntime } from "./discord-actions.js";
 import { fetchUrl } from "./fetch-url.js";
 import { memoryPropose, memoryRead } from "./memory.js";
 import { sandboxExec } from "./sandbox-exec.js";
+import { searchInternet } from "./search-internet.js";
 import { summarizeText } from "./summarize.js";
 import { weatherLookup } from "./weather.js";
-import { searchInternet } from "./search-internet.js";
 import { workspaceRead, workspaceSearch, workspaceWrite } from "./workspace-files.js";
 
 const log = childLogger("tools");

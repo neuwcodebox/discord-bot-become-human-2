@@ -123,6 +123,9 @@ function appendUnique(values: string[], next: string): string[] {
 function userProfileTemplate(userId: string, displayName: string): string {
   return `# User Profile
 
+This file stores durable memory about one Discord user in this guild. Keep it evidence-backed, useful, and scoped to
+this server. Do not store secrets, sensitive personal data, private messages, or guesses.
+
 ## Identity
 - Discord User ID: ${userId}
 - Current display name: ${displayName}
@@ -138,6 +141,12 @@ function userProfileTemplate(userId: string, displayName: string): string {
 -
 
 ## Preferences
+-
+
+## Important Past Context
+-
+
+## Things to Avoid
 -
 
 ## Notes

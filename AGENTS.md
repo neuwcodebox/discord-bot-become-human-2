@@ -34,6 +34,15 @@ npm run build
 - `any`를 쓰지 않는다. 타입을 모르면 `unknown`으로 받고, 경계에서 좁힌다.
 - 외부 JSON, YAML frontmatter, LLM 응답, 파일 저장 데이터는 `zod` 같은 런타임 검증으로 파싱한 뒤
   형식화한다. `JSON.parse(...) as T`는 새 코드에서 피한다.
+- config나 외부 데이터 구조의 TypeScript 타입은 Zod schema에서 `z.infer`로 파생한다. 타입을 수동으로
+  정의하고 schema에 `: z.ZodType<T>`를 어노테이션으로 붙이는 방식은 피한다. 그 방식은
+  `exactOptionalPropertyTypes` 환경에서 optional field 불일치를 유발하고 결국 `as T` 단언으로 이어진다.
+- `as T` 단언으로 타입 검사기를 우회하지 않는다. `as T`가 필요해 보이면 타입 설계가 잘못된 신호다.
+  Zod schema에서 infer하거나, 라이브러리 타입 가드를 사용하거나, `unknown`을 경계에서 좁히는 방식으로
+  해결한다.
+- 라이브러리 타입을 좁힐 때 `(value as { field: string }).field` 같은 단언을 쓰지 않는다. 라이브러리
+  타입이 바뀌면 조용히 실패한다. 라이브러리가 제공하는 타입 가드나 판별 속성(예: Discord.js의
+  `message.partial`, `channel.isThread()`)을 먼저 찾아 사용한다.
 - pi agent tool 파라미터는 TypeBox schema에서 타입이 추론되도록 작성한다. `params as { ... }`를
   반복해서 붙이는 방식은 피한다.
 - 라이브러리 제네릭이 넓은 타입을 요구하면 프로젝트 타입 별칭을 만든다. 예: `RuntimeAgentTool`,

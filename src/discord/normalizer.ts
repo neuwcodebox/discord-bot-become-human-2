@@ -5,8 +5,10 @@ import type {
   PartialMessage,
   PartialMessageReaction,
   PartialUser,
+  Sticker,
   User,
 } from "discord.js";
+import { StickerFormatType } from "discord.js";
 import type { AttachmentKind, NormalizedDiscordEvent, NormalizedDiscordMessage } from "../types.js";
 
 const linkPattern = /\bhttps?:\/\/[^\s<>()]+/gi;
@@ -23,8 +25,7 @@ export async function normalizeMessage(
     ? (message.channel.parentId ?? message.channelId)
     : message.channelId;
   const reference = await resolveReply(message);
-  const cleanContent =
-    ("cleanContent" in message ? message.cleanContent : (message as { content?: string }).content) ?? "";
+  const cleanContent = message.cleanContent ?? message.content ?? "";
 
   return {
     id: message.id,
@@ -37,7 +38,7 @@ export async function normalizeMessage(
       displayName,
       isBot: message.author.bot,
     },
-    content: (message as { content?: string }).content ?? "",
+    content: message.content ?? "",
     cleanContent,
     createdAt: message.createdAt?.toISOString() ?? new Date().toISOString(),
     ...(message.editedAt ? { editedAt: message.editedAt.toISOString() } : {}),
@@ -46,14 +47,20 @@ export async function normalizeMessage(
       id: user.id,
       displayName: message.guild?.members.cache.get(user.id)?.displayName ?? user.globalName ?? user.username,
     })),
-    attachments: [...message.attachments.values()].map((attachment) => ({
-      id: attachment.id,
-      url: attachment.url,
-      filename: attachment.name,
-      ...(attachment.contentType ? { mimeType: attachment.contentType } : {}),
-      size: attachment.size,
-      kind: classifyAttachment(attachment.contentType, attachment.name),
-    })),
+    attachments: [
+      ...[...message.attachments.values()].map((attachment) => ({
+        id: attachment.id,
+        url: attachment.url,
+        filename: attachment.name,
+        ...(attachment.contentType ? { mimeType: attachment.contentType } : {}),
+        size: attachment.size,
+        kind: classifyAttachment(attachment.contentType, attachment.name),
+      })),
+      ...[...message.stickers.values()]
+        .map(normalizeSticker)
+        .filter((s): s is NonNullable<typeof s> => s !== null),
+      ...normalizeCustomEmojis(message.content ?? ""),
+    ],
     embeds: message.embeds.map(normalizeEmbed),
     reactions: [...message.reactions.cache.values()].map((reaction) => ({
       emoji: reaction.emoji.toString(),
@@ -162,6 +169,60 @@ function normalizeEmbed(embed: Embed): NormalizedDiscordMessage["embeds"][number
     ...(embed.url ? { url: embed.url } : {}),
     ...(embed.image?.url ? { imageUrl: embed.image.url } : {}),
   };
+}
+
+function normalizeSticker(sticker: Sticker): NormalizedDiscordMessage["attachments"][number] | null {
+  let ext: string;
+  let mimeType: string;
+  switch (sticker.format) {
+    case StickerFormatType.PNG:
+      ext = "png";
+      mimeType = "image/png";
+      break;
+    case StickerFormatType.APNG:
+      ext = "apng";
+      mimeType = "image/apng";
+      break;
+    case StickerFormatType.GIF:
+      ext = "gif";
+      mimeType = "image/gif";
+      break;
+    case StickerFormatType.Lottie:
+      return null;
+    default:
+      return null;
+  }
+  return {
+    id: sticker.id,
+    url: sticker.url,
+    filename: `${sticker.name}.${ext}`,
+    mimeType,
+    kind: "sticker",
+  };
+}
+
+const customEmojiPattern = /<a?:(\w+):(\d+)>/g;
+
+function normalizeCustomEmojis(content: string): NormalizedDiscordMessage["attachments"] {
+  const seen = new Set<string>();
+  const result: NormalizedDiscordMessage["attachments"] = [];
+  for (const match of content.matchAll(customEmojiPattern)) {
+    const animated = match[0].startsWith("<a:");
+    const name = match[1] ?? "";
+    const id = match[2] ?? "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const ext = animated ? "gif" : "webp";
+    const mimeType = animated ? "image/gif" : "image/webp";
+    result.push({
+      id,
+      url: `https://cdn.discordapp.com/emojis/${id}.${ext}`,
+      filename: `${name}.${ext}`,
+      mimeType,
+      kind: "emoji",
+    });
+  }
+  return result;
 }
 
 function classifyAttachment(contentType: string | null | undefined, filename: string): AttachmentKind {

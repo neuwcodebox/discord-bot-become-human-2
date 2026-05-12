@@ -20,7 +20,7 @@ export async function readAttachment(
   const id = input.ref.replace(/^attachment:\/\//, "");
   const attachment = cache.get(id);
   if (!attachment) throw new Error(`Unknown attachment reference: ${input.ref}`);
-  if (attachment.kind === "image") {
+  if (attachment.kind === "image" || attachment.kind === "sticker" || attachment.kind === "emoji") {
     const image = await fetchBinary(attachment.url, input.maxBytes ?? 2_097_152);
     return {
       ref: input.ref,

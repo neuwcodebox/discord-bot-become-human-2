@@ -1,120 +1,14 @@
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model, TSchema } from "@earendil-works/pi-ai";
 
+export type { AppConfig } from "./config.js";
+
 export type RuntimeAgentTool = AgentTool<TSchema, unknown>;
 export type RuntimeModel = Model<Api>;
 
 export type MaybePromise<T> = T | Promise<T>;
 
 export type TupleRangeMs = readonly [number, number];
-
-export type AppConfig = {
-  discord: {
-    tokenEnv: string;
-    allowedGuildIds: string[];
-    allowedChannelIds: string[];
-    enableMentions: boolean;
-    enableReplies: boolean;
-    enableReactions: boolean;
-    enableMessageEditStreaming: boolean;
-  };
-  llm: {
-    provider: "openai-codex";
-    model: string;
-    reasoning: "low" | "medium" | "high" | "xhigh";
-    codex: {
-      authPath: string;
-      transport: "auto" | "responses" | "websocket";
-    };
-  };
-  runtime: {
-    rootDir: string;
-    defaultLocale: string;
-    timezone: string;
-  };
-  conversation: {
-    maxRecentMessages: number;
-    maxParticipantsForProfileLoad: number;
-    notEngaged: {
-      engageDebounceMs: TupleRangeMs;
-      directTriggerConfidence: number;
-      ambientEngagementEnabled: boolean;
-      ambientMinSilenceMs: number;
-      ambientConfidenceThreshold: number;
-      ambientMaxPerHour: number;
-    };
-    engaged: {
-      followUpBatch: {
-        quietDebounceMs: TupleRangeMs;
-        directTriggerDebounceMs: TupleRangeMs;
-        maxWaitMs: number;
-        maxMessages: number;
-      };
-      minSecondsBetweenBotReplies: number;
-      minSecondsBetweenUnpromptedReplies: number;
-      maxConsecutiveBotReplies: number;
-      replyConfidenceThreshold: number;
-      silentStayConfidenceThreshold: number;
-      disengageAfterUnrelatedHumanMessages: number;
-      disengageAfterIdleMs: number;
-    };
-    cooldownMs: TupleRangeMs;
-  };
-  streaming: {
-    enabled: boolean;
-    initialPlaceholder: string;
-    editIntervalMs: number;
-    softLimitChars: number;
-    hardLimitChars: number;
-  };
-  context: {
-    outputReserveTokens: number;
-    safetyBufferTokens: number;
-    maxContextMessageChars: number;
-    maxTranscriptChars: number;
-    maxArchiveSummariesInContext: number;
-    maxArchiveSummaryChars: number;
-    maxMemoryChars: number;
-    maxUserProfileChars: number;
-    maxToolResultChars: number;
-    maxFileReadBytes: number;
-    maxSearchResultChars: number;
-  };
-  memory: {
-    compaction: {
-      enabled: boolean;
-      maxEventsBeforeCompaction: number;
-      minEventsPerSummary: number;
-    };
-    dream: {
-      enabled: boolean;
-      intervalMinutes: number;
-      runOnConversationEnd: boolean;
-      runOnCompaction: boolean;
-      maxHistoryEntriesPerRun: number;
-      maxIterations: number;
-      allowEditSoul: boolean;
-      allowEditGroup: boolean;
-      allowEditUserProfiles: boolean;
-    };
-  };
-  tools: {
-    workspaceFiles: boolean;
-    memory: boolean;
-    summarize: boolean;
-    weather: boolean;
-    discordActions: boolean;
-    fetchUrl: boolean;
-    readAttachment: boolean;
-    sandboxExec: boolean;
-  };
-  sandbox: {
-    enabled: boolean;
-    network: boolean;
-    timeoutMs: number;
-    outputLimitBytes: number;
-  };
-};
 
 export type RuntimePaths = {
   projectRoot: string;
@@ -132,7 +26,7 @@ export type GuildWorkspace = {
   workspaceRoot: string;
 };
 
-export type AttachmentKind = "image" | "video" | "audio" | "file" | "unknown";
+export type AttachmentKind = "image" | "video" | "audio" | "file" | "sticker" | "emoji" | "unknown";
 
 export type NormalizedDiscordMessage = {
   id: string;

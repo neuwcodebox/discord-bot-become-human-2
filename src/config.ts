@@ -1,12 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
-import type { AppConfig } from "./types.js";
 
-const tupleMsSchema = z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]);
+const tupleMsSchema = z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]).readonly();
 const defaultFollowUpBatchConfig = {
-  quietDebounceMs: [3000, 5000] as [number, number],
-  directTriggerDebounceMs: [1000, 2000] as [number, number],
+  quietDebounceMs: [3000, 5000] as const,
+  directTriggerDebounceMs: [1000, 2000] as const,
   maxWaitMs: 15000,
   maxMessages: 4,
 };
@@ -19,7 +18,7 @@ const followUpBatchSchema = z
   })
   .default(defaultFollowUpBatchConfig);
 
-const configSchema: z.ZodType<AppConfig> = z.object({
+const configSchema = z.object({
   discord: z.object({
     tokenEnv: z.string().min(1),
     allowedGuildIds: z.array(z.string()),
@@ -127,7 +126,14 @@ const configSchema: z.ZodType<AppConfig> = z.object({
     fetchUrl: z.boolean(),
     readAttachment: z.boolean(),
     sandboxExec: z.boolean(),
+    searchInternet: z.boolean(),
   }),
+  search: z
+    .object({
+      provider: z.literal("tavily"),
+      apiKey: z.string().min(1),
+    })
+    .optional(),
   sandbox: z.object({
     enabled: z.boolean(),
     network: z.boolean(),
@@ -135,6 +141,8 @@ const configSchema: z.ZodType<AppConfig> = z.object({
     outputLimitBytes: z.number().int().positive(),
   }),
 });
+
+export type AppConfig = z.infer<typeof configSchema>;
 
 export const defaultConfig: AppConfig = {
   discord: {
@@ -230,6 +238,7 @@ export const defaultConfig: AppConfig = {
     fetchUrl: true,
     readAttachment: true,
     sandboxExec: true,
+    searchInternet: true,
   },
   sandbox: {
     enabled: true,

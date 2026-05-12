@@ -1,4 +1,5 @@
 import "./bootstrap-env.js";
+import { Events } from "discord.js";
 import { PiCodexAgentRunner } from "./agent/runner.js";
 import { loadOrCreateConfig } from "./config.js";
 import { ConversationOrchestrator } from "./conversation/orchestrator.js";
@@ -38,7 +39,7 @@ export async function main(): Promise<void> {
   const botIdentity: { userId?: string; names: string[] } = { names: ["bot"] };
   const orchestrator = new ConversationOrchestrator(config, paths.resourcesAgentsPath, runner, botIdentity);
   wireDiscordEvents({ client, config, paths, orchestrator });
-  client.once("ready", (readyClient) => {
+  client.once(Events.ClientReady, (readyClient) => {
     botIdentity.userId = readyClient.user.id;
     botIdentity.names = [
       ...new Set(

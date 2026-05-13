@@ -1,5 +1,6 @@
 import type { Message, TextBasedChannel } from "discord.js";
 import type { AppConfig } from "../types.js";
+import { chooseSplit } from "./chunker.js";
 import { editOwnMessage, sendDiscordMessage } from "./sender.js";
 
 export type StreamingSegment = {
@@ -21,19 +22,11 @@ export class DiscordStreamingWriter {
     private readonly channel: TextBasedChannel,
     private readonly config: AppConfig,
     private readonly replyTo?: Message<boolean>,
+    private readonly sendState: { firstReplySent: boolean } = { firstReplySent: false },
+    private readonly onFirstSend?: () => void,
   ) {}
 
-  async start(): Promise<void> {
-    this.currentMessage = await sendDiscordMessage(
-      this.channel,
-      this.config.streaming.initialPlaceholder,
-      this.replyTo ? { replyTo: this.replyTo } : {},
-    );
-    this.segments.push({ messageId: this.currentMessage.id, logicalText: "", displayText: "" });
-  }
-
   async append(delta: string): Promise<void> {
-    if (!this.currentMessage) await this.start();
     this.logicalText += delta;
     if (this.logicalText.length >= this.config.streaming.hardLimitChars) {
       await this.flush(true);
@@ -52,16 +45,28 @@ export class DiscordStreamingWriter {
     return this.currentMessage;
   }
 
+  async forceFlush(): Promise<void> {
+    await this.flush(false);
+  }
+
   private async flush(finalize: boolean): Promise<void> {
-    if (!this.currentMessage) return;
+    if (!this.logicalText && !this.currentMessage) return;
     const displayText = finalize ? closeOpenFence(this.logicalText) : displayForEdit(this.logicalText);
-    await editOwnMessage(this.currentMessage, displayText || this.config.streaming.initialPlaceholder);
-    this.lastEditAt = Date.now();
-    const current = this.segments.at(-1);
-    if (current) {
-      current.logicalText = this.logicalText;
-      current.displayText = displayText;
+    if (!this.currentMessage) {
+      const replyTo = this.sendState.firstReplySent ? undefined : this.replyTo;
+      this.currentMessage = await sendDiscordMessage(this.channel, displayText, replyTo ? { replyTo } : {});
+      this.sendState.firstReplySent = true;
+      this.segments.push({ messageId: this.currentMessage.id, logicalText: this.logicalText, displayText });
+      this.onFirstSend?.();
+    } else {
+      await editOwnMessage(this.currentMessage, displayText || this.config.streaming.initialPlaceholder);
+      const current = this.segments.at(-1);
+      if (current) {
+        current.logicalText = this.logicalText;
+        current.displayText = displayText;
+      }
     }
+    this.lastEditAt = Date.now();
   }
 
   private async rollSegment(): Promise<void> {
@@ -74,15 +79,6 @@ export class DiscordStreamingWriter {
     this.currentMessage = await sendDiscordMessage(this.channel, displayForEdit(this.logicalText));
     this.segments.push({ messageId: this.currentMessage.id, logicalText: this.logicalText, displayText: "" });
   }
-}
-
-function chooseSplit(text: string, softLimit: number): number {
-  const candidates = ["\n\n", "\n", ". ", " "];
-  for (const sep of candidates) {
-    const index = text.lastIndexOf(sep, softLimit);
-    if (index > 0) return index + sep.length;
-  }
-  return softLimit;
 }
 
 function displayForEdit(text: string): string {

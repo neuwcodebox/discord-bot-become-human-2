@@ -1,5 +1,7 @@
 import { join } from "node:path";
 import type { GuildMember, Message, TextBasedChannel } from "discord.js";
+import { splitText } from "../discord/chunker.js";
+import { sendDiscordMessage } from "../discord/sender.js";
 import { readJsonl } from "../storage/jsonl.js";
 import type { HistoryEntry, NormalizedDiscordEvent, ToolContext } from "../types.js";
 
@@ -11,11 +13,15 @@ export type DiscordActionRuntime = {
   getMember(userId: string): Promise<Record<string, unknown>>;
   getChannel(): Promise<Record<string, unknown>>;
   searchHistory(query: string, maxResults?: number): Promise<Array<Record<string, unknown>>>;
+  sendMessage(content: string): Promise<{ messageId: string }>;
 };
 
 export function createDiscordActionRuntimeFromMessage(
   message: Message<boolean>,
   context: ToolContext,
+  sendState: { firstReplySent: boolean } = { firstReplySent: false },
+  limits = { softLimitChars: 1800, hardLimitChars: 1950 },
+  onBeforeSend?: () => Promise<void>,
 ): DiscordActionRuntime {
   return {
     async react(messageId, emoji) {
@@ -48,6 +54,18 @@ export function createDiscordActionRuntimeFromMessage(
     },
     async getChannel() {
       return serializeChannel(message.channel);
+    },
+    async sendMessage(content) {
+      await onBeforeSend?.();
+      const chunks = splitText(content, limits.softLimitChars, limits.hardLimitChars);
+      let lastMessageId = "";
+      for (const chunk of chunks) {
+        const replyTo = sendState.firstReplySent ? undefined : message;
+        sendState.firstReplySent = true;
+        const sent = await sendDiscordMessage(message.channel, chunk, replyTo ? { replyTo } : {});
+        lastMessageId = sent.id;
+      }
+      return { messageId: lastMessageId };
     },
     async searchHistory(query, maxResults = 20) {
       const lower = query.toLowerCase();

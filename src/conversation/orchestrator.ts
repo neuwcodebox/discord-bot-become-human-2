@@ -503,15 +503,34 @@ export class ConversationOrchestrator {
       channelId: discordMessage.channelId,
       actorUserId: discordMessage.author.id,
     };
+    const sendState = { firstReplySent: false };
+    let writerRef: DiscordStreamingWriter | undefined;
+    const discordActions = createDiscordActionRuntimeFromMessage(
+      discordMessage,
+      toolContext,
+      sendState,
+      {
+        softLimitChars: this.config.streaming.softLimitChars,
+        hardLimitChars: this.config.streaming.hardLimitChars,
+      },
+      async () => {
+        await writerRef?.forceFlush();
+      },
+    );
     const tools = createToolRegistry(this.config, toolContext, {
       attachmentCache: this.attachmentCache,
-      discordActions: createDiscordActionRuntimeFromMessage(discordMessage, toolContext),
+      discordActions,
     });
     try {
       if (this.config.streaming.enabled && this.config.discord.enableMessageEditStreaming) {
-        const writer = new DiscordStreamingWriter(discordMessage.channel, this.config, discordMessage);
-        await writer.start();
-        stopTyping(); // placeholder message is now visible; typing indicator no longer needed
+        const writer = new DiscordStreamingWriter(
+          discordMessage.channel,
+          this.config,
+          discordMessage,
+          sendState,
+          stopTyping,
+        );
+        writerRef = writer;
         const result = await this.runner.run({
           sessionId: `discord:${workspace.guildId}:${discordMessage.channelId}`,
           messages: context,
@@ -552,9 +571,11 @@ export class ConversationOrchestrator {
           discordMessage,
           streaming: false,
         });
-        const sent = await sendDiscordMessage(discordMessage.channel, replyTextOrFallback(finalResult.text), {
-          replyTo: discordMessage,
-        });
+        const sent = await sendDiscordMessage(
+          discordMessage.channel,
+          replyTextOrFallback(finalResult.text),
+          sendState.firstReplySent ? {} : { replyTo: discordMessage },
+        );
         noteBotReply(this.config, state, sent.id);
         log.info(
           {

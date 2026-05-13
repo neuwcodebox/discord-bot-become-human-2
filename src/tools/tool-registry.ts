@@ -203,6 +203,16 @@ export function createToolRegistry(
         return jsonResult(await discordActions.searchHistory(params.query, params.maxResults));
       },
     });
+    addTool(tools, {
+      name: "discord_send_message",
+      label: "Send Message",
+      description:
+        "Send an additional message to the current channel. Your main text reply is always sent separately — use this only when content should appear as an independent message at a specific point in the conversation.",
+      parameters: Type.Object({ content: Type.String() }),
+      execute: async (_toolCallId, params) => {
+        return jsonResult(await discordActions.sendMessage(params.content));
+      },
+    });
   }
   if (config.tools.searchInternet && config.search) {
     const { provider: kind, apiKey } = config.search;

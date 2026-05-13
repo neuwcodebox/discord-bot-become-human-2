@@ -1,6 +1,6 @@
 import "./bootstrap-env.js";
 import { Events } from "discord.js";
-import { PiCodexAgentRunner } from "./agent/runner.js";
+import { OpenAICompatibleAgentRunner, PiCodexAgentRunner } from "./agent/runner.js";
 import { loadOrCreateConfig } from "./config.js";
 import { ConversationOrchestrator } from "./conversation/orchestrator.js";
 import { createDiscordClient, loginDiscord, wireDiscordEvents } from "./discord/client.js";
@@ -23,19 +23,23 @@ export async function main(): Promise<void> {
       projectRoot,
       runtimeRoot: paths.runtimeRoot,
       configPath: paths.configPath,
-      codexAuthPath: paths.codexAuthPath,
+      ...(paths.codexAuthPath !== undefined ? { codexAuthPath: paths.codexAuthPath } : {}),
       logLevel: process.env.LOG_LEVEL ?? process.env.BOT_LOG_LEVEL ?? "info",
     },
     "runtime initialized",
   );
-  if (!runtime.codexAuthExists) {
+  if (config.llm.provider === "openai-codex" && !runtime.codexAuthExists) {
     log.warn(
-      `Codex auth file not found at ${paths.codexAuthPath}. Run from this project root: npm run login:codex`,
+      `Codex auth file not found at ${paths.codexAuthPath ?? ""}. Run from this project root: npm run login:codex`,
     );
   }
 
   const client = createDiscordClient(config);
-  const runner = new PiCodexAgentRunner(config);
+  const llm = config.llm;
+  const runner =
+    llm.provider === "openai-codex"
+      ? new PiCodexAgentRunner({ ...config, llm })
+      : new OpenAICompatibleAgentRunner({ ...config, llm });
   const botIdentity: { userId?: string; names: string[] } = { names: ["bot"] };
   const orchestrator = new ConversationOrchestrator(config, paths.resourcesAgentsPath, runner, botIdentity);
   wireDiscordEvents({ client, config, paths, orchestrator });

@@ -16,7 +16,7 @@ export type RuntimePaths = {
   templatesWorkspaceRoot: string;
   runtimeRoot: string;
   configPath: string;
-  codexAuthPath: string;
+  codexAuthPath?: string;
   guildsRoot: string;
 };
 

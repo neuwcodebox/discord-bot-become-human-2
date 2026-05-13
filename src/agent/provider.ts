@@ -3,7 +3,6 @@ import type { OAuthCredentials } from "@earendil-works/pi-ai/oauth";
 import { getOAuthApiKey } from "@earendil-works/pi-ai/oauth";
 import { z } from "zod";
 import { expandHome } from "../paths/runtime-paths.js";
-import type { AppConfig } from "../types.js";
 
 const nonEmptyString = z.string().min(1);
 const piAiOAuthEntrySchema = z
@@ -13,7 +12,7 @@ const piAiOAuthEntrySchema = z
     refresh: nonEmptyString,
     expires: z.number(),
   })
-  .passthrough();
+  .loose();
 const codexAuthFileSchema = z
   .object({
     "openai-codex": piAiOAuthEntrySchema.optional(),
@@ -24,7 +23,7 @@ const codexAuthFileSchema = z
     token: nonEmptyString.optional(),
     access: nonEmptyString.optional(),
   })
-  .passthrough();
+  .loose();
 
 type CodexAuthFile = z.infer<typeof codexAuthFileSchema>;
 type PiAiOAuthEntry = z.infer<typeof piAiOAuthEntrySchema>;
@@ -34,20 +33,19 @@ export type CodexCredentials = {
   headers?: Record<string, string>;
 };
 
-export async function loadCodexCredentials(config: AppConfig): Promise<CodexCredentials> {
-  return loadConfiguredAuthPath(config);
+export async function loadCodexCredentials(authPath: string): Promise<CodexCredentials> {
+  return loadConfiguredAuthPath(expandHome(authPath));
 }
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-async function loadConfiguredAuthPath(config: AppConfig): Promise<CodexCredentials> {
-  const authPath = expandHome(config.llm.codex.authPath);
+async function loadConfiguredAuthPath(resolvedPath: string): Promise<CodexCredentials> {
   try {
-    const raw = await readFile(authPath, "utf8");
+    const raw = await readFile(resolvedPath, "utf8");
     const parsed = codexAuthFileSchema.parse(JSON.parse(raw));
-    const oauth = await loadPiAiOAuthAuth(parsed, authPath);
+    const oauth = await loadPiAiOAuthAuth(parsed, resolvedPath);
     if (oauth.apiKey) return oauth;
     const token =
       stringValue(parsed.access_token) ??

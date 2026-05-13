@@ -19,6 +19,7 @@ async function loadEffectiveConfig() {
 
 async function main(): Promise<void> {
   const { paths } = await loadEffectiveConfig();
+  if (!paths.codexAuthPath) throw new Error("login:codex requires provider: openai-codex in config");
   const authPath = expandHome(paths.codexAuthPath);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {

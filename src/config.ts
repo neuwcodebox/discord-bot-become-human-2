@@ -18,6 +18,28 @@ const followUpBatchSchema = z
   })
   .default(defaultFollowUpBatchConfig);
 
+const codexLlmSchema = z.object({
+  provider: z.literal("openai-codex"),
+  model: z.string().min(1),
+  reasoning: z.enum(["low", "medium", "high", "xhigh"]),
+  codex: z.object({
+    authPath: z.string().min(1),
+    transport: z.enum(["auto", "responses", "websocket"]),
+  }),
+});
+
+const openaiCompatLlmSchema = z.object({
+  provider: z.literal("openai-compatible"),
+  model: z.string().min(1),
+  baseURL: z.string().min(1),
+  apiKeyEnv: z.string().min(1),
+  contextWindow: z.number().int().positive(),
+  reasoning: z.enum(["low", "medium", "high", "xhigh"]).default("medium"),
+});
+
+export type CodexLlmConfig = z.infer<typeof codexLlmSchema>;
+export type OpenAICompatLlmConfig = z.infer<typeof openaiCompatLlmSchema>;
+
 const configSchema = z.object({
   discord: z.object({
     tokenEnv: z.string().min(1),
@@ -28,15 +50,7 @@ const configSchema = z.object({
     enableReactions: z.boolean(),
     enableMessageEditStreaming: z.boolean(),
   }),
-  llm: z.object({
-    provider: z.literal("openai-codex"),
-    model: z.string().min(1),
-    reasoning: z.enum(["low", "medium", "high", "xhigh"]),
-    codex: z.object({
-      authPath: z.string().min(1),
-      transport: z.enum(["auto", "responses", "websocket"]),
-    }),
-  }),
+  llm: z.discriminatedUnion("provider", [codexLlmSchema, openaiCompatLlmSchema]),
   runtime: z.object({
     rootDir: z.string().min(1),
     defaultLocale: z.string().min(1),

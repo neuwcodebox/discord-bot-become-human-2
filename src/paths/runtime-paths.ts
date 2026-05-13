@@ -16,14 +16,15 @@ export function projectRootFromImportMeta(importMetaUrl: string): string {
 
 export function createRuntimePaths(projectRoot: string, config: AppConfig): RuntimePaths {
   const runtimeRoot = resolve(expandHome(config.runtime.rootDir));
-  const codexAuthPath = resolve(expandHome(config.llm.codex.authPath));
+  const codexAuthPath =
+    config.llm.provider === "openai-codex" ? resolve(expandHome(config.llm.codex.authPath)) : undefined;
   return {
     projectRoot,
     resourcesAgentsPath: join(projectRoot, "resources", "AGENTS.md"),
     templatesWorkspaceRoot: join(projectRoot, "templates", "workspace"),
     runtimeRoot,
     configPath: join(runtimeRoot, "config.json"),
-    codexAuthPath,
+    ...(codexAuthPath !== undefined ? { codexAuthPath } : {}),
     guildsRoot: join(runtimeRoot, "guilds"),
   };
 }

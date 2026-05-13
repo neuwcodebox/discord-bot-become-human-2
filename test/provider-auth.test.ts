@@ -2,7 +2,6 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultConfig } from "../src/config.js";
 
 vi.mock("@earendil-works/pi-ai/oauth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@earendil-works/pi-ai/oauth")>();
@@ -45,13 +44,7 @@ describe("codex auth loading", () => {
     );
     const { loadCodexCredentials } = await import("../src/agent/provider.js");
 
-    const credentials = await loadCodexCredentials({
-      ...defaultConfig,
-      llm: {
-        ...defaultConfig.llm,
-        codex: { ...defaultConfig.llm.codex, authPath },
-      },
-    });
+    const credentials = await loadCodexCredentials(authPath);
 
     expect(credentials.apiKey).toBe("access-token");
     await expect(readFile(authPath, "utf8")).resolves.toContain("access-token");
@@ -74,13 +67,7 @@ describe("codex auth loading", () => {
     );
     const { loadCodexCredentials } = await import("../src/agent/provider.js");
 
-    const credentials = await loadCodexCredentials({
-      ...defaultConfig,
-      llm: {
-        ...defaultConfig.llm,
-        codex: { ...defaultConfig.llm.codex, authPath: join(temp, "missing-codex-auth.json") },
-      },
-    });
+    const credentials = await loadCodexCredentials(join(temp, "missing-codex-auth.json"));
 
     expect(credentials.apiKey).toBeUndefined();
   });

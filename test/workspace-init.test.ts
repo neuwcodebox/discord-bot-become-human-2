@@ -13,10 +13,6 @@ describe("workspace init", () => {
     const config = {
       ...defaultConfig,
       runtime: { ...defaultConfig.runtime, rootDir: temp },
-      llm: {
-        ...defaultConfig.llm,
-        codex: { ...defaultConfig.llm.codex, authPath: join(temp, "codex-auth.json") },
-      },
     };
     const paths = createRuntimePaths(projectRoot, config);
     await ensureRuntimeRoot(paths);

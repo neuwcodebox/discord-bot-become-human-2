@@ -1758,7 +1758,9 @@ type StreamingSegment = {
 
 ### 21.1 provider
 
-기본 provider는 `openai-codex`다.
+`config.json`의 `llm.provider`로 provider를 선택한다. 기본값은 `openai-codex`다.
+
+#### openai-codex
 
 ```txt
 package: @earendil-works/pi-ai
@@ -1777,17 +1779,49 @@ npm run login:codex
 
 이 커맨드는 pi-ai CLI의 `auth.json` 저장 방식을 사용하지 않고, pi-ai OAuth 라이브러리를 직접 호출해서 `authPath`에 저장한다.
 
+#### openai-compatible
+
+OpenAI chat completion API 호환 엔드포인트(로컬 모델, OpenRouter, self-hosted LLM 등)를 사용할 때 선택한다.
+
+```txt
+package: openai
+provider: openai-compatible
+model: <모델명>
+baseURL: <엔드포인트 URL>
+apiKeyEnv: <API 키를 담은 환경변수 이름>
+contextWindow: <컨텍스트 토큰 한도>
+```
+
+`apiKeyEnv`가 가리키는 환경변수에서 API 키를 읽는다. `baseURL`은 OpenAI-compatible 서버의 base URL이다.
+
+예시 (`config.json`):
+
+```json
+{
+  "llm": {
+    "provider": "openai-compatible",
+    "model": "gpt-5.5",
+    "baseURL": "https://api.openai.com/v1",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "contextWindow": 128000,
+    "reasoning": "medium"
+  }
+}
+```
+
 ### 21.2 agent runner
 
-`agent/runner.ts`는 pi agent harness를 감싼다.
+`agent/runner.ts`는 선택된 provider에 따라 runner를 구분한다.
 
-역할:
+- `openai-codex`: pi agent harness(`PiCodexAgentRunner`)를 사용한다.
+- `openai-compatible`: `openai` 라이브러리 chat completion API로 직접 ReAct loop를 구현한다(`OpenAICompatibleAgentRunner`). 최대 16 iteration 실행 후 중단한다.
+
+역할 (공통):
 
 ```txt
 - model/provider 구성
 - sessionId 구성
 - tools 등록
-- Agent event subscribe
 - response streaming writer 연결
 - ReAct loop 실행
 - errors/retries 처리

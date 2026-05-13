@@ -1,6 +1,7 @@
 import type { AfterToolCallResult, AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { getModels, registerBuiltInApiProviders } from "@earendil-works/pi-ai";
+import type { CodexLlmConfig, OpenAICompatLlmConfig } from "../config.js";
 import { normalizeContextMessages, truncateText } from "../context/limits.js";
 import { childLogger } from "../logger.js";
 import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
@@ -8,122 +9,184 @@ import { loadCodexCredentials } from "./provider.js";
 
 const log = childLogger("agent-runner");
 
+type CodexAppConfig = Omit<AppConfig, "llm"> & { llm: CodexLlmConfig };
+type OpenAICompatAppConfig = Omit<AppConfig, "llm"> & { llm: OpenAICompatLlmConfig };
+
 export interface AgentRunner {
   run(request: AgentRunRequest): Promise<AgentRunResult>;
 }
 
 export class PiCodexAgentRunner implements AgentRunner {
-  constructor(private readonly config: AppConfig) {
+  constructor(private readonly config: CodexAppConfig) {
     registerBuiltInApiProviders();
   }
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     const startedAt = Date.now();
-    const model = resolveModel(this.config);
+    const model = resolveCodexModel(this.config);
     const messages = normalizeContextMessages(request.messages, this.config, model.contextWindow);
-    const credentials = await loadCodexCredentials(this.config);
+    const credentials = await loadCodexCredentials(this.config.llm.codex.authPath);
     if (!credentials.apiKey) {
       throw new Error(
         `Codex auth is not available at ${this.config.llm.codex.authPath}. Run: npm run login:codex`,
       );
     }
 
-    const normalizedSystemPrompt = messages
-      .filter((message) => message.role === "system" || message.role === "developer")
-      .map((message) => message.content)
-      .join("\n\n");
-    const prompts: AgentMessage[] = messages
-      .filter((message) => message.role === "user")
-      .map((message) => ({
-        role: "user",
-        content: [{ type: "text", text: message.content }],
-        timestamp: Date.now(),
-      }));
-
-    const agent = new Agent({
-      sessionId: request.sessionId,
-      initialState: {
-        systemPrompt: normalizedSystemPrompt,
-        model,
-        thinkingLevel: this.config.llm.reasoning,
-        tools: request.tools ?? [],
-      },
+    return runAgent(request, this.config, model, {
       getApiKey: async () => credentials.apiKey,
       transport: this.config.llm.codex.transport === "websocket" ? "websocket" : "auto",
-      afterToolCall: async (context) =>
-        normalizeToolResult(context.result, this.config.context.maxToolResultChars),
+      thinkingLevel: this.config.llm.reasoning,
+      messages,
+      startedAt,
     });
-    log.info(
-      {
-        sessionId: request.sessionId,
-        model: model.id,
-        reasoning: this.config.llm.reasoning,
-        messageCount: messages.length,
-        estimatedContextWindow: model.contextWindow,
-        toolCount: request.tools?.length ?? 0,
-        streaming: Boolean(request.onTextDelta),
-      },
-      "agent run started",
-    );
+  }
+}
 
-    let finalText = "";
-    let currentAssistantText = "";
-    agent.subscribe(async (event) => {
-      if (event.type === "message_start" && event.message.role === "assistant") {
-        currentAssistantText = "";
+export class OpenAICompatibleAgentRunner implements AgentRunner {
+  constructor(private readonly config: OpenAICompatAppConfig) {
+    registerBuiltInApiProviders();
+  }
+
+  async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    const startedAt = Date.now();
+    const model: RuntimeModel = {
+      id: this.config.llm.model,
+      name: this.config.llm.model,
+      api: "openai-completions",
+      provider: "openai-compatible",
+      baseUrl: this.config.llm.baseURL,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: this.config.llm.contextWindow,
+      maxTokens: this.config.context.outputReserveTokens,
+    };
+    const messages = normalizeContextMessages(request.messages, this.config, model.contextWindow);
+
+    const apiKeyEnv = this.config.llm.apiKeyEnv;
+    const apiKey = process.env[apiKeyEnv];
+    if (!apiKey) throw new Error(`Environment variable ${apiKeyEnv} is not set`);
+
+    return runAgent(request, this.config, model, {
+      getApiKey: async () => apiKey,
+      thinkingLevel: this.config.llm.reasoning,
+      messages,
+      startedAt,
+    });
+  }
+}
+
+type RunAgentOptions = {
+  getApiKey: () => Promise<string | undefined>;
+  transport?: "auto" | "websocket";
+  thinkingLevel: "low" | "medium" | "high" | "xhigh";
+  messages: ReturnType<typeof normalizeContextMessages>;
+  startedAt: number;
+};
+
+async function runAgent(
+  request: AgentRunRequest,
+  config: AppConfig,
+  model: RuntimeModel,
+  opts: RunAgentOptions,
+): Promise<AgentRunResult> {
+  const { messages, startedAt } = opts;
+
+  const normalizedSystemPrompt = messages
+    .filter((message) => message.role === "system" || message.role === "developer")
+    .map((message) => message.content)
+    .join("\n\n");
+  const prompts: AgentMessage[] = messages
+    .filter((message) => message.role === "user")
+    .map((message) => ({
+      role: "user",
+      content: [{ type: "text", text: message.content }],
+      timestamp: Date.now(),
+    }));
+
+  const agent = new Agent({
+    sessionId: request.sessionId,
+    initialState: {
+      systemPrompt: normalizedSystemPrompt,
+      model,
+      thinkingLevel: opts.thinkingLevel,
+      tools: request.tools ?? [],
+    },
+    getApiKey: opts.getApiKey,
+    ...(opts.transport !== undefined ? { transport: opts.transport } : {}),
+    afterToolCall: async (context) => normalizeToolResult(context.result, config.context.maxToolResultChars),
+  });
+  log.info(
+    {
+      sessionId: request.sessionId,
+      model: model.id,
+      provider: model.provider,
+      reasoning: opts.thinkingLevel,
+      messageCount: messages.length,
+      estimatedContextWindow: model.contextWindow,
+      toolCount: request.tools?.length ?? 0,
+      streaming: Boolean(request.onTextDelta),
+    },
+    "agent run started",
+  );
+
+  let finalText = "";
+  let currentAssistantText = "";
+  agent.subscribe(async (event) => {
+    if (event.type === "message_start" && event.message.role === "assistant") {
+      currentAssistantText = "";
+      return;
+    }
+    if (event.type === "message_update") {
+      if (event.assistantMessageEvent.type === "text_delta") {
+        currentAssistantText += event.assistantMessageEvent.delta;
+        finalText = currentAssistantText;
+        await request.onTextDelta?.(event.assistantMessageEvent.delta);
         return;
       }
-      if (event.type === "message_update") {
-        if (event.assistantMessageEvent.type === "text_delta") {
-          currentAssistantText += event.assistantMessageEvent.delta;
-          finalText = currentAssistantText;
-          await request.onTextDelta?.(event.assistantMessageEvent.delta);
-          return;
-        }
-        const text = extractAssistantText(event.message);
-        const delta = text.startsWith(currentAssistantText) ? text.slice(currentAssistantText.length) : text;
-        currentAssistantText = text;
-        finalText = text;
-        if (delta) await request.onTextDelta?.(delta);
-        return;
-      }
-      if (event.type !== "message_end" || event.message.role !== "assistant") return;
       const text = extractAssistantText(event.message);
+      const delta = text.startsWith(currentAssistantText) ? text.slice(currentAssistantText.length) : text;
       currentAssistantText = text;
       finalText = text;
-    });
-
-    await agent.prompt(prompts);
-    await agent.waitForIdle();
-    if (!request.allowEmptyText && finalText.trim().length === 0) {
-      const latestAssistant = findLatestAssistantMessage(agent.state.messages);
-      const stateText = latestAssistant ? extractAssistantText(latestAssistant) : "";
-      if (stateText.trim().length > 0) {
-        finalText = stateText;
-      } else {
-        log.warn(
-          {
-            sessionId: request.sessionId,
-            ...summarizeAssistantMessage(latestAssistant),
-          },
-          "agent run produced empty text",
-        );
-      }
+      if (delta) await request.onTextDelta?.(delta);
+      return;
     }
-    log.info(
-      {
-        sessionId: request.sessionId,
-        durationMs: Date.now() - startedAt,
-        outputLength: finalText.length,
-        transcriptMessageCount: agent.state.messages.length,
-      },
-      "agent run completed",
-    );
-    return {
-      text: finalText,
-      messages: agent.state.messages,
-    };
+    if (event.type !== "message_end" || event.message.role !== "assistant") return;
+    const text = extractAssistantText(event.message);
+    currentAssistantText = text;
+    finalText = text;
+  });
+
+  await agent.prompt(prompts);
+  await agent.waitForIdle();
+  if (!request.allowEmptyText && finalText.trim().length === 0) {
+    const latestAssistant = findLatestAssistantMessage(agent.state.messages);
+    const stateText = latestAssistant ? extractAssistantText(latestAssistant) : "";
+    if (stateText.trim().length > 0) {
+      finalText = stateText;
+    } else {
+      log.warn(
+        {
+          sessionId: request.sessionId,
+          ...summarizeAssistantMessage(latestAssistant),
+        },
+        "agent run produced empty text",
+      );
+    }
   }
+  log.info(
+    {
+      sessionId: request.sessionId,
+      durationMs: Date.now() - startedAt,
+      outputLength: finalText.length,
+      transcriptMessageCount: agent.state.messages.length,
+    },
+    "agent run completed",
+  );
+  return {
+    text: finalText,
+    messages: agent.state.messages,
+  };
 }
 
 function normalizeToolResult(
@@ -159,7 +222,7 @@ export class StaticAgentRunner implements AgentRunner {
   }
 }
 
-function resolveModel(config: AppConfig): RuntimeModel {
+function resolveCodexModel(config: CodexAppConfig): RuntimeModel {
   const model = getModels("openai-codex").find((candidate) => candidate.id === config.llm.model);
   if (!model) throw new Error(`Unknown openai-codex model: ${config.llm.model}`);
   return model;

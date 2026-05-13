@@ -9,7 +9,7 @@ const cursorFiles = [".cursor", ".dream_cursor"];
 export async function ensureRuntimeRoot(paths: RuntimePaths): Promise<{ codexAuthExists: boolean }> {
   await mkdir(paths.runtimeRoot, { recursive: true });
   await mkdir(paths.guildsRoot, { recursive: true });
-  return { codexAuthExists: await exists(paths.codexAuthPath) };
+  return { codexAuthExists: paths.codexAuthPath !== undefined && (await exists(paths.codexAuthPath)) };
 }
 
 export async function ensureGuildWorkspace(paths: RuntimePaths, workspace: GuildWorkspace): Promise<void> {

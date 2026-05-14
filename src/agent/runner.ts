@@ -5,6 +5,7 @@ import type { Langfuse } from "langfuse";
 import type { CodexLlmConfig, OpenAICompatLlmConfig } from "../config.js";
 import { estimateContextTokens, normalizeContextMessages, truncateText } from "../context/limits.js";
 import { childLogger } from "../logger.js";
+import { instrumentToolsForLangfuse, summarizeAgentToolActivity } from "../observability/langfuse.js";
 import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
 import { loadCodexCredentials } from "./provider.js";
 
@@ -112,13 +113,31 @@ async function runAgent(
       streaming: Boolean(request.onTextDelta),
     },
   });
-  const generation = trace?.generation({
+  const agentObservation = trace?.span({
+    name: "agent",
+    startTime: new Date(startedAt),
+    input: messages.map((message) => ({
+      role: message.role,
+      contentLength: message.content.length,
+    })),
+    metadata: {
+      model: model.id,
+      provider: model.provider,
+      reasoning: opts.thinkingLevel,
+      messageCount: messages.length,
+      toolCount: request.tools?.length ?? 0,
+      streaming: Boolean(request.onTextDelta),
+      langfuseObservationType: "agent",
+    },
+  });
+  const generation = (agentObservation ?? trace)?.generation({
     name: "llm",
     model: model.id,
     startTime: new Date(startedAt),
     input: messages.map((m) => ({ role: m.role, content: m.content })),
     usage: { input: estimateContextTokens(messages), unit: "TOKENS" },
   });
+  const runTools = instrumentToolsForLangfuse(request.tools ?? [], agentObservation ?? trace ?? null);
 
   const normalizedSystemPrompt = messages
     .filter((message) => message.role === "system")
@@ -138,7 +157,7 @@ async function runAgent(
       systemPrompt: normalizedSystemPrompt,
       model,
       thinkingLevel: opts.thinkingLevel,
-      tools: request.tools ?? [],
+      tools: runTools,
     },
     getApiKey: opts.getApiKey,
     ...(opts.transport !== undefined ? { transport: opts.transport } : {}),
@@ -152,7 +171,7 @@ async function runAgent(
       reasoning: opts.thinkingLevel,
       messageCount: messages.length,
       estimatedContextWindow: model.contextWindow,
-      toolCount: request.tools?.length ?? 0,
+      toolCount: runTools.length,
       streaming: Boolean(request.onTextDelta),
     },
     "agent run started",
@@ -203,12 +222,14 @@ async function runAgent(
     }
   }
   const durationMs = Date.now() - startedAt;
+  const toolActivity = summarizeAgentToolActivity(agent.state.messages);
   log.info(
     {
       sessionId: request.sessionId,
       durationMs,
       outputLength: finalText.length,
       transcriptMessageCount: agent.state.messages.length,
+      ...toolActivity,
     },
     "agent run completed",
   );
@@ -223,6 +244,16 @@ async function runAgent(
       durationMs,
       outputLength: finalText.length,
       transcriptMessageCount: agent.state.messages.length,
+      ...toolActivity,
+    },
+  });
+  agentObservation?.end({
+    output: { textLength: finalText.length },
+    metadata: {
+      durationMs,
+      outputLength: finalText.length,
+      transcriptMessageCount: agent.state.messages.length,
+      ...toolActivity,
     },
   });
   trace?.update({ output: finalText });

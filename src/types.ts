@@ -48,6 +48,20 @@ export type NormalizedDiscordMessage = {
     authorId?: string;
     authorDisplayName?: string;
     contentPreview?: string;
+    attachments?: Array<{
+      id: string;
+      url: string;
+      filename: string;
+      mimeType?: string;
+      size?: number;
+      kind: AttachmentKind;
+    }>;
+    embeds?: Array<{
+      title?: string;
+      description?: string;
+      url?: string;
+      imageUrl?: string;
+    }>;
   };
   mentions: Array<{
     id: string;

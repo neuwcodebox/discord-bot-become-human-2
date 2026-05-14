@@ -23,7 +23,14 @@ describe("transcript builder", () => {
         authorId: "u2",
         payload: {
           ...message("m2", "u2", "min", "see file"),
-          replyTo: { messageId: "m1", authorId: "u1", authorDisplayName: "neuw", contentPreview: "hello" },
+          replyTo: {
+            messageId: "m1",
+            authorId: "u1",
+            authorDisplayName: "neuw",
+            contentPreview: "hello",
+            attachments: [{ id: "ra1", url: "https://cdn.example/r.png", filename: "r.png", mimeType: "image/png", size: 2, kind: "image" as const }],
+            embeds: [{ title: "reply-embed", description: "reply-desc" }],
+          },
           attachments: [
             {
               id: "a1",
@@ -60,6 +67,10 @@ describe("transcript builder", () => {
     expect(transcript).toContain('edited="2026-05-10T12:02:00.000+00:00"');
     expect(transcript).toContain("deleted target");
     expect(transcript).toContain("<reply");
+    // reply itself has attachments and embeds
+    const replyBlock = transcript.slice(transcript.indexOf("<reply"), transcript.indexOf("</reply>") + 8);
+    expect(replyBlock).toContain("ra1");
+    expect(replyBlock).toContain("reply-embed");
     expect(transcript).toContain("<atts>");
     expect(transcript).toContain("<embeds>");
     expect(transcript).toContain("<rxs>");

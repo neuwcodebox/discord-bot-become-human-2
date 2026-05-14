@@ -62,6 +62,33 @@ function renderMessage(message: NormalizedDiscordMessage, target: boolean, timez
     ].filter(Boolean);
     lines.push(`    <reply ${replyFlags.join(" ")}>`);
     if (message.replyTo.contentPreview) lines.push(`      <text>${message.replyTo.contentPreview}</text>`);
+    if (message.replyTo.attachments && message.replyTo.attachments.length > 0) {
+      lines.push("      <atts>");
+      for (const attachment of message.replyTo.attachments) {
+        const parts = [
+          `id="${attr(attachment.id)}"`,
+          `file="${attr(attachment.filename)}"`,
+          attachment.mimeType ? `type="${attr(attachment.mimeType)}"` : undefined,
+          attachment.size !== undefined ? `bytes="${attachment.size}"` : undefined,
+          `kind="${attachment.kind}"`,
+          `ref="attachment://${attr(attachment.id)}"`,
+        ].filter(Boolean);
+        lines.push(`        <att ${parts.join(" ")} />`);
+      }
+      lines.push("      </atts>");
+    }
+    if (message.replyTo.embeds && message.replyTo.embeds.length > 0) {
+      lines.push("      <embeds>");
+      for (const embed of message.replyTo.embeds) {
+        const parts = [
+          embed.title ? `title="${attr(embed.title)}"` : undefined,
+          embed.url ? `url="${attr(embed.url)}"` : undefined,
+          embed.imageUrl ? `image="${attr(embed.imageUrl)}"` : undefined,
+        ].filter(Boolean);
+        lines.push(`        <embed ${parts.join(" ")}>${embed.description ?? ""}</embed>`);
+      }
+      lines.push("      </embeds>");
+    }
     lines.push("    </reply>");
   }
   lines.push(`    <text>${message.cleanContent}</text>`);

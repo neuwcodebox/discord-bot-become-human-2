@@ -149,16 +149,36 @@ async function resolveReply(
 ): Promise<NormalizedDiscordMessage["replyTo"]> {
   const ref = message.reference;
   if (!ref?.messageId) return undefined;
-  const cached = message.channel.messages.cache.get(ref.messageId);
-  if (!cached) {
-    return { messageId: ref.messageId };
+  let resolved = message.channel.messages.cache.get(ref.messageId);
+  if (!resolved) {
+    try {
+      resolved = await message.channel.messages.fetch(ref.messageId);
+    } catch {
+      return { messageId: ref.messageId };
+    }
   }
-  const member = cached.member;
+  const member = resolved.member;
+  const attachments = [
+    ...[...resolved.attachments.values()].map((attachment) => ({
+      id: attachment.id,
+      url: attachment.url,
+      filename: attachment.name,
+      ...(attachment.contentType ? { mimeType: attachment.contentType } : {}),
+      size: attachment.size,
+      kind: classifyAttachment(attachment.contentType, attachment.name),
+    })),
+    ...[...resolved.stickers.values()]
+      .map(normalizeSticker)
+      .filter((s): s is NonNullable<typeof s> => s !== null),
+  ];
+  const embeds = resolved.embeds.map(normalizeEmbed);
   return {
     messageId: ref.messageId,
-    authorId: cached.author.id,
-    authorDisplayName: member?.displayName ?? cached.author.globalName ?? cached.author.username,
-    contentPreview: cached.cleanContent.slice(0, 300),
+    authorId: resolved.author.id,
+    authorDisplayName: member?.displayName ?? resolved.author.globalName ?? resolved.author.username,
+    contentPreview: resolved.cleanContent.slice(0, 300),
+    ...(attachments.length > 0 ? { attachments } : {}),
+    ...(embeds.length > 0 ? { embeds } : {}),
   };
 }
 

@@ -35,6 +35,7 @@ export async function decideEngagement(input: {
   const result = await input.runner.run({
     sessionId: `decision:${input.currentMessage.guildId}:${input.currentMessage.channelId}`,
     messages,
+    traceLabel: "engagement_decision",
   });
   return schema.parse(parseJson(result.text));
 }

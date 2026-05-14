@@ -1,8 +1,9 @@
 import type { AfterToolCallResult, AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { getModels, registerBuiltInApiProviders } from "@earendil-works/pi-ai";
+import type { Langfuse } from "langfuse";
 import type { CodexLlmConfig, OpenAICompatLlmConfig } from "../config.js";
-import { normalizeContextMessages, truncateText } from "../context/limits.js";
+import { estimateContextTokens, normalizeContextMessages, truncateText } from "../context/limits.js";
 import { childLogger } from "../logger.js";
 import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
 import { loadCodexCredentials } from "./provider.js";
@@ -17,7 +18,10 @@ export interface AgentRunner {
 }
 
 export class PiCodexAgentRunner implements AgentRunner {
-  constructor(private readonly config: CodexAppConfig) {
+  constructor(
+    private readonly config: CodexAppConfig,
+    private readonly langfuse?: Langfuse | null,
+  ) {
     registerBuiltInApiProviders();
   }
 
@@ -38,12 +42,16 @@ export class PiCodexAgentRunner implements AgentRunner {
       thinkingLevel: this.config.llm.reasoning,
       messages,
       startedAt,
+      langfuse: this.langfuse ?? null,
     });
   }
 }
 
 export class OpenAICompatibleAgentRunner implements AgentRunner {
-  constructor(private readonly config: OpenAICompatAppConfig) {
+  constructor(
+    private readonly config: OpenAICompatAppConfig,
+    private readonly langfuse?: Langfuse | null,
+  ) {
     registerBuiltInApiProviders();
   }
 
@@ -72,6 +80,7 @@ export class OpenAICompatibleAgentRunner implements AgentRunner {
       thinkingLevel: this.config.llm.reasoning,
       messages,
       startedAt,
+      langfuse: this.langfuse ?? null,
     });
   }
 }
@@ -82,6 +91,7 @@ type RunAgentOptions = {
   thinkingLevel: "low" | "medium" | "high" | "xhigh";
   messages: ReturnType<typeof normalizeContextMessages>;
   startedAt: number;
+  langfuse: Langfuse | null;
 };
 
 async function runAgent(
@@ -90,7 +100,25 @@ async function runAgent(
   model: RuntimeModel,
   opts: RunAgentOptions,
 ): Promise<AgentRunResult> {
-  const { messages, startedAt } = opts;
+  const { messages, startedAt, langfuse } = opts;
+
+  const trace = langfuse?.trace({
+    name: request.traceLabel ?? "agent-run",
+    sessionId: request.sessionId,
+    metadata: {
+      model: model.id,
+      provider: model.provider,
+      toolCount: request.tools?.length ?? 0,
+      streaming: Boolean(request.onTextDelta),
+    },
+  });
+  const generation = trace?.generation({
+    name: "llm",
+    model: model.id,
+    startTime: new Date(startedAt),
+    input: messages.map((m) => ({ role: m.role, content: m.content })),
+    usage: { input: estimateContextTokens(messages), unit: "TOKENS" },
+  });
 
   const normalizedSystemPrompt = messages
     .filter((message) => message.role === "system" || message.role === "developer")
@@ -174,15 +202,30 @@ async function runAgent(
       );
     }
   }
+  const durationMs = Date.now() - startedAt;
   log.info(
     {
       sessionId: request.sessionId,
-      durationMs: Date.now() - startedAt,
+      durationMs,
       outputLength: finalText.length,
       transcriptMessageCount: agent.state.messages.length,
     },
     "agent run completed",
   );
+  generation?.end({
+    output: finalText,
+    usage: {
+      input: estimateContextTokens(messages),
+      output: Math.ceil(finalText.length / 4),
+      unit: "TOKENS",
+    },
+    metadata: {
+      durationMs,
+      outputLength: finalText.length,
+      transcriptMessageCount: agent.state.messages.length,
+    },
+  });
+  trace?.update({ output: finalText });
   return {
     text: finalText,
     messages: agent.state.messages,

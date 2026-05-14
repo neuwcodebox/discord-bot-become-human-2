@@ -53,6 +53,7 @@ export class DreamRunner {
       sessionId: `dream:${this.guildId}`,
       messages: context,
       tools,
+      traceLabel: "dream",
     });
     const after = await snapshotFiles(this.workspaceRoot, watchedFiles);
     const changedFiles = diffSnapshots(before, after);

@@ -148,6 +148,15 @@ const configSchema = z.object({
       apiKey: z.string().min(1),
     })
     .optional(),
+  observability: z
+    .object({
+      langfuse: z.object({
+        publicKeyEnv: z.string().min(1).default("LANGFUSE_PUBLIC_KEY"),
+        secretKeyEnv: z.string().min(1).default("LANGFUSE_SECRET_KEY"),
+        host: z.url().default("https://cloud.langfuse.com"),
+      }),
+    })
+    .optional(),
   sandbox: z.object({
     enabled: z.boolean(),
     network: z.boolean(),

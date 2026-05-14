@@ -1,5 +1,6 @@
 import "./bootstrap-env.js";
 import { Events } from "discord.js";
+import { Langfuse } from "langfuse";
 import { OpenAICompatibleAgentRunner, PiCodexAgentRunner } from "./agent/runner.js";
 import { loadOrCreateConfig } from "./config.js";
 import { ConversationOrchestrator } from "./conversation/orchestrator.js";
@@ -34,15 +35,39 @@ export async function main(): Promise<void> {
     );
   }
 
+  const lfConfig = config.observability?.langfuse;
+  let langfuse: Langfuse | null = null;
+  if (lfConfig) {
+    const pk = process.env[lfConfig.publicKeyEnv];
+    const sk = process.env[lfConfig.secretKeyEnv];
+    if (pk && sk) {
+      langfuse = new Langfuse({ publicKey: pk, secretKey: sk, baseUrl: lfConfig.host, flushInterval: 5000 });
+      log.info({ host: lfConfig.host }, "langfuse observability enabled");
+    } else {
+      log.warn(
+        { publicKeyEnv: lfConfig.publicKeyEnv, secretKeyEnv: lfConfig.secretKeyEnv },
+        "langfuse config present but env vars missing — observability disabled",
+      );
+    }
+  }
+
   const client = createDiscordClient(config);
   const llm = config.llm;
   const runner =
     llm.provider === "openai-codex"
-      ? new PiCodexAgentRunner({ ...config, llm })
-      : new OpenAICompatibleAgentRunner({ ...config, llm });
+      ? new PiCodexAgentRunner({ ...config, llm }, langfuse)
+      : new OpenAICompatibleAgentRunner({ ...config, llm }, langfuse);
   const botIdentity: { userId?: string; names: string[] } = { names: ["bot"] };
   const orchestrator = new ConversationOrchestrator(config, paths.resourcesAgentsPath, runner, botIdentity);
   wireDiscordEvents({ client, config, paths, orchestrator });
+
+  const shutdown = async () => {
+    await langfuse?.shutdownAsync();
+    process.exit(0);
+  };
+  process.once("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown());
+
   client.once(Events.ClientReady, (readyClient) => {
     botIdentity.userId = readyClient.user.id;
     botIdentity.names = [

@@ -109,6 +109,7 @@ export class ConversationOrchestrator {
         sessionId: `compact:${workspace.guildId}`,
         messages: buildCompactionSummaryContext(events),
         allowEmptyText: false,
+        traceLabel: "compaction",
       });
       return result.text;
     }).compactIfNeeded();
@@ -536,6 +537,7 @@ export class ConversationOrchestrator {
           messages: context,
           tools,
           onTextDelta: (delta) => writer.append(delta),
+          traceLabel: "response",
         });
         const finalResult = await this.retryEmptyReply({
           result,
@@ -563,6 +565,7 @@ export class ConversationOrchestrator {
           sessionId: `discord:${workspace.guildId}:${discordMessage.channelId}`,
           messages: context,
           tools,
+          traceLabel: "response",
         });
         const finalResult = await this.retryEmptyReply({
           result,
@@ -653,6 +656,7 @@ export class ConversationOrchestrator {
         }),
         tools,
         allowEmptyText: true,
+        traceLabel: "reaction",
       });
       log.info(
         {
@@ -710,6 +714,7 @@ export class ConversationOrchestrator {
     );
     const retryRequest: AgentRunRequest = {
       sessionId: `discord-retry:${input.workspace.guildId}:${input.discordMessage.channelId}`,
+      traceLabel: "response_retry",
       messages: [
         ...input.context,
         {

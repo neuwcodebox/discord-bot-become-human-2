@@ -230,6 +230,7 @@ export type AgentRunRequest = {
   signal?: AbortSignal;
   onTextDelta?: (text: string) => MaybePromise<void>;
   allowEmptyText?: boolean;
+  traceLabel?: string;
 };
 
 export type AgentRunResult = {

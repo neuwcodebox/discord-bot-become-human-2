@@ -41,6 +41,7 @@ export async function decideStay(input: {
   const result = await input.runner.run({
     sessionId: `stay:${input.currentMessage.guildId}:${input.currentMessage.channelId}`,
     messages,
+    traceLabel: "stay_decision",
   });
   return schema.parse(parseJson(result.text));
 }

@@ -3,9 +3,9 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import { getModels, registerBuiltInApiProviders } from "@earendil-works/pi-ai";
 import type { Langfuse } from "langfuse";
 import type { CodexLlmConfig, OpenAICompatLlmConfig } from "../config.js";
-import { estimateContextTokens, normalizeContextMessages, truncateText } from "../context/limits.js";
+import { normalizeContextMessages, truncateText } from "../context/limits.js";
 import { childLogger } from "../logger.js";
-import { instrumentToolsForLangfuse, summarizeAgentToolActivity } from "../observability/langfuse.js";
+import { createLangfuseAgentObserver, summarizeAgentToolActivity } from "../observability/langfuse.js";
 import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
 import { loadCodexCredentials } from "./provider.js";
 
@@ -103,41 +103,17 @@ async function runAgent(
 ): Promise<AgentRunResult> {
   const { messages, startedAt, langfuse } = opts;
 
-  const trace = langfuse?.trace({
-    name: request.traceLabel ?? "agent-run",
-    sessionId: request.sessionId,
-    metadata: {
-      model: model.id,
-      provider: model.provider,
-      toolCount: request.tools?.length ?? 0,
-      streaming: Boolean(request.onTextDelta),
-    },
-  });
-  const agentObservation = trace?.span({
-    name: "agent",
-    startTime: new Date(startedAt),
-    input: messages.map((message) => ({
-      role: message.role,
-      contentLength: message.content.length,
-    })),
-    metadata: {
-      model: model.id,
-      provider: model.provider,
-      reasoning: opts.thinkingLevel,
-      messageCount: messages.length,
-      toolCount: request.tools?.length ?? 0,
-      streaming: Boolean(request.onTextDelta),
-      langfuseObservationType: "agent",
-    },
-  });
-  const generation = (agentObservation ?? trace)?.generation({
-    name: "llm",
-    model: model.id,
-    startTime: new Date(startedAt),
-    input: messages.map((m) => ({ role: m.role, content: m.content })),
-    usage: { input: estimateContextTokens(messages), unit: "TOKENS" },
-  });
-  const runTools = instrumentToolsForLangfuse(request.tools ?? [], agentObservation ?? trace ?? null);
+  const langfuseObserver = langfuse
+    ? createLangfuseAgentObserver({
+        langfuse,
+        ...(request.traceLabel !== undefined ? { traceLabel: request.traceLabel } : {}),
+        sessionId: request.sessionId,
+        model: model.id,
+        provider: model.provider,
+        inputMessages: messages,
+        startedAt,
+      })
+    : null;
 
   const normalizedSystemPrompt = messages
     .filter((message) => message.role === "system")
@@ -157,7 +133,7 @@ async function runAgent(
       systemPrompt: normalizedSystemPrompt,
       model,
       thinkingLevel: opts.thinkingLevel,
-      tools: runTools,
+      tools: request.tools ?? [],
     },
     getApiKey: opts.getApiKey,
     ...(opts.transport !== undefined ? { transport: opts.transport } : {}),
@@ -171,7 +147,7 @@ async function runAgent(
       reasoning: opts.thinkingLevel,
       messageCount: messages.length,
       estimatedContextWindow: model.contextWindow,
-      toolCount: runTools.length,
+      toolCount: request.tools?.length ?? 0,
       streaming: Boolean(request.onTextDelta),
     },
     "agent run started",
@@ -180,6 +156,7 @@ async function runAgent(
   let finalText = "";
   let currentAssistantText = "";
   agent.subscribe(async (event) => {
+    await langfuseObserver?.handleEvent(event);
     if (event.type === "message_start" && event.message.role === "assistant") {
       currentAssistantText = "";
       return;
@@ -223,6 +200,7 @@ async function runAgent(
   }
   const durationMs = Date.now() - startedAt;
   const toolActivity = summarizeAgentToolActivity(agent.state.messages);
+  langfuseObserver?.finish(finalText, agent.state.messages);
   log.info(
     {
       sessionId: request.sessionId,
@@ -233,30 +211,6 @@ async function runAgent(
     },
     "agent run completed",
   );
-  generation?.end({
-    output: finalText,
-    usage: {
-      input: estimateContextTokens(messages),
-      output: Math.ceil(finalText.length / 4),
-      unit: "TOKENS",
-    },
-    metadata: {
-      durationMs,
-      outputLength: finalText.length,
-      transcriptMessageCount: agent.state.messages.length,
-      ...toolActivity,
-    },
-  });
-  agentObservation?.end({
-    output: { textLength: finalText.length },
-    metadata: {
-      durationMs,
-      outputLength: finalText.length,
-      transcriptMessageCount: agent.state.messages.length,
-      ...toolActivity,
-    },
-  });
-  trace?.update({ output: finalText });
   return {
     text: finalText,
     messages: agent.state.messages,

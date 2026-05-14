@@ -1,112 +1,358 @@
-import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { truncateText } from "../context/limits.js";
-import type { RuntimeAgentTool } from "../types.js";
+import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentContextMessage } from "../types.js";
 
-const MAX_CAPTURED_STRING_CHARS = 500;
-const MAX_CAPTURED_ARRAY_ITEMS = 10;
-const MAX_CAPTURED_OBJECT_KEYS = 20;
-const MAX_CAPTURED_DEPTH = 4;
-const MAX_TOOL_UPDATE_EVENTS = 5;
+const MAX_UPDATE_EVENTS_PER_TOOL = 5;
 
 type ObservationLevel = "DEFAULT" | "ERROR";
 
-export type LangfuseToolObservationEnd = {
+export type LangfuseScoreBody = {
+  name: string;
+  value: number;
+  traceId?: string;
+  observationId?: string;
+};
+
+export type LangfuseEventBody = {
+  name: string;
   output?: unknown;
-  metadata?: unknown;
+  metadata?: Record<string, unknown>;
+};
+
+export type LangfuseSpanEndBody = {
+  output?: unknown;
+  metadata?: Record<string, unknown>;
   level?: ObservationLevel;
   statusMessage?: string;
 };
 
-export type LangfuseToolObservationEvent = {
-  name: string;
+export type LangfuseGenerationEndBody = {
   output?: unknown;
-  metadata?: unknown;
+  metadata?: Record<string, unknown>;
+  usage?: Record<string, number>;
+  costDetails?: Record<string, number>;
 };
 
-export type LangfuseToolObservation = {
-  event(body: LangfuseToolObservationEvent): unknown;
-  end(body?: LangfuseToolObservationEnd): unknown;
+export type LangfuseSpan = {
+  id: string;
+  event(body: LangfuseEventBody): unknown;
+  end(body?: LangfuseSpanEndBody): unknown;
 };
 
-export type LangfuseToolObservationParent = {
+export type LangfuseGeneration = {
+  id: string;
+  end(body?: LangfuseGenerationEndBody): unknown;
+};
+
+export type LangfuseTrace = {
+  id: string;
+  update(body?: { input?: unknown; output?: unknown; metadata?: Record<string, unknown> }): unknown;
   span(body: {
     name: string;
     startTime?: Date;
     input?: unknown;
-    metadata?: unknown;
-  }): LangfuseToolObservation;
+    metadata?: Record<string, unknown>;
+  }): LangfuseSpan;
+  generation(body: {
+    name: string;
+    startTime?: Date;
+    input?: unknown;
+    output?: unknown;
+    metadata?: Record<string, unknown>;
+    model?: string;
+    usage?: Record<string, number>;
+    costDetails?: Record<string, number>;
+  }): LangfuseGeneration;
 };
 
-export function instrumentToolsForLangfuse(
-  tools: RuntimeAgentTool[],
-  parent: LangfuseToolObservationParent | null | undefined,
-): RuntimeAgentTool[] {
-  if (!parent || tools.length === 0) return tools;
-  return tools.map((tool) => ({
-    ...tool,
-    execute: async (toolCallId, params, signal, onUpdate) => {
-      const startedAt = Date.now();
-      const metadata: Record<string, unknown> = {
-        toolName: tool.name,
-        toolLabel: tool.label,
-        toolCallId,
-        langfuseObservationType: "tool",
-        paramKeys: recordKeys(params),
-        capturedStringLimitChars: MAX_CAPTURED_STRING_CHARS,
-      };
-      const span = safeStartToolSpan(parent, {
-        name: `tool:${tool.name}`,
-        startTime: new Date(startedAt),
-        input: summarizeToolInput(tool.name, params),
-        metadata,
+export type LangfuseAgentClient = {
+  trace(body?: {
+    name?: string;
+    timestamp?: Date;
+    sessionId?: string;
+    input?: unknown;
+    output?: unknown;
+    metadata?: Record<string, unknown>;
+  }): LangfuseTrace;
+  score(body: LangfuseScoreBody): unknown;
+};
+
+export type LangfuseAgentObserverOptions = {
+  langfuse: LangfuseAgentClient;
+  traceLabel?: string;
+  sessionId: string;
+  model: string;
+  provider: string;
+  inputMessages: AgentContextMessage[];
+  startedAt: number;
+};
+
+export type LangfuseAgentObserver = {
+  handleEvent(event: AgentEvent): Promise<void>;
+  finish(finalText: string, messages: AgentMessage[]): void;
+};
+
+type ActiveToolSpan = {
+  span: LangfuseSpan;
+  toolName: string;
+  toolCallId: string;
+  updateCount: number;
+  startOrder: number;
+};
+
+type ActiveGeneration = {
+  generation: LangfuseGeneration;
+  turnIndex: number;
+  startOrder: number;
+};
+
+type AssistantGenerationOutput =
+  | string
+  | {
+      text?: string;
+      toolCalls: Array<{
+        id: string;
+        name: string;
+        arguments: string;
+      }>;
+    };
+
+export function createLangfuseAgentObserver(options: LangfuseAgentObserverOptions): LangfuseAgentObserver {
+  const trace = options.langfuse.trace({
+    name: options.traceLabel ?? "agent-run",
+    timestamp: new Date(options.startedAt),
+    sessionId: options.sessionId,
+    input: summarizeInputMessages(options.inputMessages),
+    metadata: {
+      model: options.model,
+      provider: options.provider,
+      messageCount: options.inputMessages.length,
+    },
+  });
+
+  const activeToolSpans = new Map<string, ActiveToolSpan>();
+  let activeGeneration: ActiveGeneration | null = null;
+  let eventOrder = 0;
+  let toolCallCount = 0;
+  let errorCount = 0;
+  let turnCount = 0;
+  let completed = false;
+
+  function nextOrder(): number {
+    eventOrder += 1;
+    return eventOrder;
+  }
+
+  function handleMessageStart(event: Extract<AgentEvent, { type: "message_start" }>): void {
+    if (event.message.role !== "assistant") return;
+    const order = nextOrder();
+    activeGeneration = {
+      generation: trace.generation({
+        name: "llm-response",
+        startTime: new Date(),
+        input: latestUserInput(options.inputMessages),
+        model: event.message.model || options.model,
+        metadata: {
+          provider: event.message.provider || options.provider,
+          turnIndex: turnCount + 1,
+          eventOrder: order,
+        },
+      }),
+      turnIndex: turnCount + 1,
+      startOrder: order,
+    };
+  }
+
+  function handleMessageEnd(event: Extract<AgentEvent, { type: "message_end" }>): void {
+    if (event.message.role !== "assistant") return;
+    const generation = activeGeneration;
+    if (!generation) return;
+    const usage = usageDetails(event.message);
+    const costDetails = costDetailsFromUsage(event.message.usage);
+    const toolCalls = extractToolCalls(event.message.content);
+    const endBody: LangfuseGenerationEndBody = {
+      output: assistantGenerationOutput(event.message.content),
+      metadata: {
+        provider: event.message.provider || options.provider,
+        stopReason: event.message.stopReason,
+        turnIndex: generation.turnIndex,
+        startOrder: generation.startOrder,
+        endOrder: nextOrder(),
+        toolCallCount: toolCalls.length,
+        toolCallNames: toolCalls.map((part) => part.name),
+      },
+      usage,
+    };
+    if (costDetails) endBody.costDetails = costDetails;
+    generation.generation.end(endBody);
+    activeGeneration = null;
+  }
+
+  function handleToolStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {
+    const order = nextOrder();
+    toolCallCount += 1;
+    const span = trace.span({
+      name: `tool:${event.toolName}`,
+      startTime: new Date(),
+      input: safeSerialize(event.args),
+      metadata: {
+        tool: event.toolName,
+        toolCallId: event.toolCallId,
+        eventOrder: order,
+      },
+    });
+    activeToolSpans.set(event.toolCallId, {
+      span,
+      toolName: event.toolName,
+      toolCallId: event.toolCallId,
+      updateCount: 0,
+      startOrder: order,
+    });
+  }
+
+  function handleToolUpdate(event: Extract<AgentEvent, { type: "tool_execution_update" }>): void {
+    const spanData = activeToolSpans.get(event.toolCallId);
+    if (!spanData) return;
+    spanData.updateCount += 1;
+    if (spanData.updateCount > MAX_UPDATE_EVENTS_PER_TOOL) return;
+    spanData.span.event({
+      name: "tool_update",
+      output: summarizeToolResult(event.partialResult),
+      metadata: {
+        tool: event.toolName,
+        toolCallId: event.toolCallId,
+        sequence: spanData.updateCount,
+        eventOrder: nextOrder(),
+      },
+    });
+  }
+
+  function handleToolEnd(event: Extract<AgentEvent, { type: "tool_execution_end" }>): void {
+    const spanData = activeToolSpans.get(event.toolCallId);
+    if (!spanData) return;
+    if (event.isError) {
+      errorCount += 1;
+      safeScore(options.langfuse, {
+        name: "tool_is_error",
+        value: 1,
+        traceId: trace.id,
+        observationId: spanData.span.id,
       });
+    }
+    const endBody: LangfuseSpanEndBody = {
+      output: summarizeToolResult(event.result),
+      level: event.isError ? "ERROR" : "DEFAULT",
+      metadata: {
+        tool: spanData.toolName,
+        toolCallId: spanData.toolCallId,
+        isError: event.isError,
+        startOrder: spanData.startOrder,
+        endOrder: nextOrder(),
+        updateCount: spanData.updateCount,
+        updateEventsCaptured: Math.min(spanData.updateCount, MAX_UPDATE_EVENTS_PER_TOOL),
+      },
+    };
+    if (event.isError) {
+      const statusMessage = extractToolStatusMessage(event.result);
+      if (statusMessage !== undefined) endBody.statusMessage = statusMessage;
+    }
+    spanData.span.end(endBody);
+    activeToolSpans.delete(event.toolCallId);
+  }
 
-      let updateCount = 0;
-      const tracedOnUpdate =
-        onUpdate === undefined
-          ? undefined
-          : (partialResult: AgentToolResult<unknown>) => {
-              updateCount += 1;
-              if (span && updateCount <= MAX_TOOL_UPDATE_EVENTS) {
-                safeEvent(span, {
-                  name: "tool_update",
-                  output: summarizeToolResult(partialResult),
-                  metadata: { toolName: tool.name, toolCallId, sequence: updateCount },
-                });
-              }
-              onUpdate(partialResult);
-            };
+  function handleTurnEnd(event: Extract<AgentEvent, { type: "turn_end" }>): void {
+    turnCount += 1;
+    if (event.message.role === "assistant" && activeGeneration) {
+      handleMessageEnd({ type: "message_end", message: event.message });
+    }
+  }
 
+  function complete(finalText: string, messages: AgentMessage[]): void {
+    if (completed) return;
+    completed = true;
+    for (const spanData of activeToolSpans.values()) {
+      spanData.span.end({
+        level: "ERROR",
+        statusMessage: "tool span was still active when agent ended",
+        metadata: {
+          tool: spanData.toolName,
+          toolCallId: spanData.toolCallId,
+          startOrder: spanData.startOrder,
+          endOrder: nextOrder(),
+          updateCount: spanData.updateCount,
+          incomplete: true,
+        },
+      });
+    }
+    activeToolSpans.clear();
+
+    const toolActivity = summarizeAgentToolActivity(messages);
+    const scores = computeEvaluationScores(toolCallCount, errorCount, turnCount);
+    trace.update({
+      output: finalText,
+      metadata: {
+        completed: true,
+        model: options.model,
+        provider: options.provider,
+        eventCount: eventOrder,
+        ...toolActivity,
+        ...scores,
+      },
+    });
+    safeScore(options.langfuse, {
+      name: "tool_call_count",
+      value: scores.tool_call_count,
+      traceId: trace.id,
+    });
+    safeScore(options.langfuse, { name: "turn_count", value: scores.turn_count, traceId: trace.id });
+    safeScore(options.langfuse, {
+      name: "total_tool_errors",
+      value: scores.total_tool_errors,
+      traceId: trace.id,
+    });
+    safeScore(options.langfuse, {
+      name: "tool_success_rate",
+      value: scores.tool_success_rate,
+      traceId: trace.id,
+    });
+    safeScore(options.langfuse, {
+      name: "session_had_errors",
+      value: scores.session_had_errors,
+      traceId: trace.id,
+    });
+  }
+
+  return {
+    async handleEvent(event) {
       try {
-        const result = await tool.execute(toolCallId, params, signal, tracedOnUpdate);
-        safeEnd(span, {
-          output: summarizeToolResult(result),
-          level: "DEFAULT",
-          metadata: {
-            ...metadata,
-            durationMs: Date.now() - startedAt,
-            updateCount,
-            updateEventsCaptured: Math.min(updateCount, MAX_TOOL_UPDATE_EVENTS),
-          },
-        });
-        return result;
-      } catch (error) {
-        const errorSummary = summarizeError(error);
-        safeEnd(span, {
-          output: errorSummary,
-          level: "ERROR",
-          statusMessage: errorSummary.message,
-          metadata: {
-            ...metadata,
-            durationMs: Date.now() - startedAt,
-            updateCount,
-            updateEventsCaptured: Math.min(updateCount, MAX_TOOL_UPDATE_EVENTS),
-          },
-        });
-        throw error;
+        switch (event.type) {
+          case "message_start":
+            handleMessageStart(event);
+            break;
+          case "message_end":
+            handleMessageEnd(event);
+            break;
+          case "tool_execution_start":
+            handleToolStart(event);
+            break;
+          case "tool_execution_update":
+            handleToolUpdate(event);
+            break;
+          case "tool_execution_end":
+            handleToolEnd(event);
+            break;
+          case "turn_end":
+            handleTurnEnd(event);
+            break;
+          case "agent_end":
+            complete(extractFinalAssistantText(event.messages), event.messages);
+            break;
+        }
+      } catch {
+        // Observability must never change agent behavior.
       }
     },
-  }));
+    finish: complete,
+  };
 }
 
 export function summarizeAgentToolActivity(messages: AgentMessage[]): Record<string, unknown> {
@@ -140,151 +386,139 @@ export function summarizeAgentToolActivity(messages: AgentMessage[]): Record<str
   };
 }
 
-function safeStartToolSpan(
-  parent: LangfuseToolObservationParent,
-  body: Parameters<LangfuseToolObservationParent["span"]>[0],
-): LangfuseToolObservation | null {
-  try {
-    return parent.span(body);
-  } catch {
-    return null;
-  }
+function summarizeInputMessages(messages: AgentContextMessage[]): Array<Record<string, unknown>> {
+  return messages.map((message) => ({
+    role: message.role,
+    content: message.content,
+    contentLength: message.content.length,
+  }));
 }
 
-function safeEvent(span: LangfuseToolObservation, body: LangfuseToolObservationEvent): void {
-  try {
-    span.event(body);
-  } catch {
-    // Observability must never change tool behavior.
-  }
+function latestUserInput(messages: AgentContextMessage[]): string | undefined {
+  const message = messages.findLast((candidate) => candidate.role === "user");
+  if (!message) return undefined;
+  return message.content;
 }
 
-function safeEnd(span: LangfuseToolObservation | null, body: LangfuseToolObservationEnd): void {
-  if (!span) return;
-  try {
-    span.end(body);
-  } catch {
-    // Observability must never change tool behavior.
-  }
+function extractFinalAssistantText(messages: AgentMessage[]): string {
+  const assistant = messages.findLast((message): message is Extract<AgentMessage, { role: "assistant" }> => {
+    return message.role === "assistant";
+  });
+  return assistant ? extractTextContent(assistant.content) : "";
 }
 
-function summarizeToolInput(toolName: string, params: unknown): unknown {
-  if (!isRecord(params)) return sanitizeValue(params);
-
-  if (toolName === "workspace_write") {
-    return summarizeKnownParams(params, ["path"], ["contents"]);
-  }
-  if (toolName === "discord_send_message") {
-    return summarizeKnownParams(params, [], ["content"]);
-  }
-  if (toolName === "discord_edit_own") {
-    return summarizeKnownParams(params, ["messageId"], ["content"]);
-  }
-  if (toolName === "summarize_text") {
-    return summarizeKnownParams(params, ["maxChars"], ["text"]);
-  }
-  if (toolName === "memory_propose") {
-    return summarizeKnownParams(params, ["target", "confidence", "evidenceMessageIds"], ["note"]);
-  }
-
-  return sanitizeValue(params);
+function extractTextContent(content: Array<{ type: string; text?: string }> | undefined): string {
+  if (!content?.length) return "";
+  return content
+    .filter((item) => item.type === "text" && typeof item.text === "string")
+    .map((item) => item.text)
+    .join("\n");
 }
 
-function summarizeKnownParams(
-  params: Record<string, unknown>,
-  visibleKeys: string[],
-  sizeOnlyKeys: string[],
-): Record<string, unknown> {
-  const summary: Record<string, unknown> = {};
-  for (const key of visibleKeys) {
-    if (key in params) summary[key] = sanitizeValue(params[key], key);
-  }
-  for (const key of sizeOnlyKeys) {
-    if (key in params) summary[key] = summarizeOpaqueText(params[key]);
-  }
-  return summary;
+function assistantGenerationOutput(
+  content: Extract<AgentMessage, { role: "assistant" }>["content"],
+): AssistantGenerationOutput {
+  const text = extractTextContent(content);
+  const toolCalls = extractToolCalls(content).map((part) => ({
+    id: part.id,
+    name: part.name,
+    arguments: safeSerialize(part.arguments),
+  }));
+  if (toolCalls.length === 0) return text;
+  return text.length > 0 ? { text, toolCalls } : { toolCalls };
 }
 
-function summarizeToolResult(result: AgentToolResult<unknown>): Record<string, unknown> {
-  let textPartCount = 0;
-  let imagePartCount = 0;
-  let textLength = 0;
+function extractToolCalls(
+  content: Extract<AgentMessage, { role: "assistant" }>["content"],
+): Array<Extract<Extract<AgentMessage, { role: "assistant" }>["content"][number], { type: "toolCall" }>> {
+  return content.filter(
+    (
+      part,
+    ): part is Extract<
+      Extract<AgentMessage, { role: "assistant" }>["content"][number],
+      { type: "toolCall" }
+    > => part.type === "toolCall",
+  );
+}
 
-  for (const part of result.content) {
-    if (part.type === "text") {
-      textPartCount += 1;
-      textLength += part.text.length;
-    } else {
-      imagePartCount += 1;
-    }
+function summarizeToolResult(result: unknown): string {
+  if (!isRecord(result)) return safeSerialize(result);
+  const content = result.content;
+  if (Array.isArray(content)) {
+    const text = content
+      .filter(isTextContent)
+      .map((item) => item.text)
+      .join("\n");
+    if (text) return text;
   }
+  return safeSerialize(result);
+}
 
-  const summary: Record<string, unknown> = {
-    contentPartCount: result.content.length,
-    textPartCount,
-    imagePartCount,
-    textLength,
-    details: sanitizeValue(result.details, "details"),
+function extractToolStatusMessage(result: unknown): string | undefined {
+  const text = summarizeToolResult(result);
+  return text || undefined;
+}
+
+function usageDetails(message: Extract<AgentMessage, { role: "assistant" }>): Record<string, number> {
+  return {
+    input: message.usage.input || 0,
+    output: message.usage.output || 0,
+    total: message.usage.totalTokens || (message.usage.input || 0) + (message.usage.output || 0),
   };
-  if (result.terminate !== undefined) summary.terminate = result.terminate;
-  return summary;
 }
 
-function sanitizeValue(value: unknown, key?: string, depth = 0, seen = new WeakSet<object>()): unknown {
-  if (value === null) return null;
-  if (value === undefined) return { type: "undefined" };
-  if (typeof value === "string") return sanitizeString(value, key);
-  if (typeof value === "number" || typeof value === "boolean") return value;
-  if (typeof value === "bigint") return value.toString();
-  if (value instanceof Date) return value.toISOString();
-
-  if (Array.isArray(value)) {
-    if (seen.has(value)) return "[Circular]";
-    seen.add(value);
-    const items = value
-      .slice(0, MAX_CAPTURED_ARRAY_ITEMS)
-      .map((item) => sanitizeValue(item, key, depth + 1, seen));
-    if (value.length <= MAX_CAPTURED_ARRAY_ITEMS) return items;
-    return { items, totalItems: value.length, truncatedItems: value.length - MAX_CAPTURED_ARRAY_ITEMS };
-  }
-
-  if (!isRecord(value)) return { type: typeof value };
-  if (seen.has(value)) return "[Circular]";
-  if (depth >= MAX_CAPTURED_DEPTH) return { type: "object", keyCount: Object.keys(value).length };
-
-  seen.add(value);
-  const entries = Object.entries(value).slice(0, MAX_CAPTURED_OBJECT_KEYS);
-  const result: Record<string, unknown> = {};
-  for (const [entryKey, entryValue] of entries) {
-    result[entryKey] = sanitizeValue(entryValue, entryKey, depth + 1, seen);
-  }
-  const keyCount = Object.keys(value).length;
-  if (keyCount > MAX_CAPTURED_OBJECT_KEYS) {
-    result.truncatedKeys = keyCount - MAX_CAPTURED_OBJECT_KEYS;
-  }
-  return result;
+function costDetailsFromUsage(
+  usage: Extract<AgentMessage, { role: "assistant" }>["usage"],
+): Record<string, number> | undefined {
+  const cost = usage.cost;
+  if (!cost) return undefined;
+  return {
+    total: cost.total,
+    input: cost.input,
+    output: cost.output,
+    cacheRead: cost.cacheRead,
+    cacheWrite: cost.cacheWrite,
+  };
 }
 
-function sanitizeString(value: string, key?: string): unknown {
+function computeEvaluationScores(toolCallCount: number, errorCount: number, turnCount: number) {
+  return {
+    tool_call_count: toolCallCount,
+    turn_count: turnCount,
+    total_tool_errors: errorCount,
+    tool_success_rate: toolCallCount > 0 ? (toolCallCount - errorCount) / toolCallCount : 1,
+    session_had_errors: errorCount > 0 ? 1 : 0,
+  };
+}
+
+function safeSerialize(value: unknown): string {
+  try {
+    return JSON.stringify(value, redactingReplacer, 2);
+  } catch {
+    return `[unserializable ${typeof value}]`;
+  }
+}
+
+function redactingReplacer(key: string, value: unknown): unknown {
   if (key && isSensitiveKey(key)) return "[REDACTED]";
-  if (key && isOpaqueTextKey(key)) return summarizeOpaqueText(value);
-  const capped = truncateText(value, MAX_CAPTURED_STRING_CHARS);
-  if (!capped.truncated) return value;
-  return { preview: capped.text, length: value.length, truncated: true };
+  if (typeof value === "bigint") return value.toString();
+  return value;
 }
 
-function summarizeOpaqueText(value: unknown): unknown {
-  if (typeof value !== "string") return sanitizeValue(value);
-  return { type: "string", length: value.length };
-}
-
-function recordKeys(value: unknown): string[] {
-  if (!isRecord(value)) return [];
-  return Object.keys(value);
+function safeScore(langfuse: LangfuseAgentClient, body: LangfuseScoreBody): void {
+  try {
+    langfuse.score(body);
+  } catch {
+    // Observability must never change agent behavior.
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTextContent(value: unknown): value is { type: "text"; text: string } {
+  return isRecord(value) && value.type === "text" && typeof value.text === "string";
 }
 
 function isSensitiveKey(key: string): boolean {
@@ -298,25 +532,4 @@ function isSensitiveKey(key: string): boolean {
     normalized.includes("api_key") ||
     normalized.includes("refresh")
   );
-}
-
-function isOpaqueTextKey(key: string): boolean {
-  const normalized = key.toLowerCase();
-  return (
-    normalized === "content" ||
-    normalized === "contents" ||
-    normalized === "text" ||
-    normalized === "note" ||
-    normalized === "systemprompt" ||
-    normalized === "prompt"
-  );
-}
-
-function summarizeError(error: unknown): { name?: string; message: string } {
-  if (error instanceof Error) {
-    const summary: { name?: string; message: string } = { message: error.message };
-    if (error.name) summary.name = error.name;
-    return summary;
-  }
-  return { message: String(error) };
 }

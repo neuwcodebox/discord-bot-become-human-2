@@ -49,10 +49,16 @@ describe("transcript builder", () => {
       },
     ];
 
-    const transcript = buildTranscript(events, { guildId: "g", channelId: "c", targetMessageIds: ["m2"] });
+    const transcript = buildTranscript(events, {
+      guildId: "g",
+      channelId: "c",
+      targetMessageIds: ["m2"],
+      timezone: "UTC",
+    });
 
-    expect(transcript).toContain('<msg id="m2" uid="u2" name="min"');
-    expect(transcript).toContain("edited deleted target");
+    expect(transcript).toContain('<msg id="m2" author="min"');
+    expect(transcript).toContain('edited="2026-05-10T12:02:00.000+00:00"');
+    expect(transcript).toContain("deleted target");
     expect(transcript).toContain("<reply");
     expect(transcript).toContain("<atts>");
     expect(transcript).toContain("<embeds>");

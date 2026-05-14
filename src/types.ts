@@ -216,7 +216,7 @@ export type HistoryEntry = {
   memoryTargets: string[];
 };
 
-export type AgentRole = "system" | "developer" | "user" | "assistant" | "tool";
+export type AgentRole = "system" | "user" | "assistant" | "tool";
 
 export type AgentContextMessage = {
   role: AgentRole;

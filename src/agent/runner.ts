@@ -121,7 +121,7 @@ async function runAgent(
   });
 
   const normalizedSystemPrompt = messages
-    .filter((message) => message.role === "system" || message.role === "developer")
+    .filter((message) => message.role === "system")
     .map((message) => message.content)
     .join("\n\n");
   const prompts: AgentMessage[] = messages

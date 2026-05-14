@@ -30,6 +30,7 @@ export async function decideEngagement(input: {
   state: ConversationRuntimeState;
   events: NormalizedDiscordEvent[];
   currentMessage: NormalizedDiscordMessage;
+  timezone?: string;
 }): Promise<EngagementDecision> {
   const messages = await buildEngagementDecisionContext(input);
   const result = await input.runner.run({

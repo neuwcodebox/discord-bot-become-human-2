@@ -107,7 +107,7 @@ export class ConversationOrchestrator {
     const compacted = await new MemoryCompactor(workspace.workspaceRoot, this.config, async (events) => {
       const result = await this.runner.run({
         sessionId: `compact:${workspace.guildId}`,
-        messages: buildCompactionSummaryContext(events),
+        messages: buildCompactionSummaryContext(events, this.config.runtime.timezone),
         allowEmptyText: false,
         traceLabel: "compaction",
       });
@@ -293,6 +293,7 @@ export class ConversationOrchestrator {
           state,
           events,
           currentMessage,
+          timezone: this.config.runtime.timezone,
         })
       : forcedSilentStay(gate.reason, currentMessage.id);
     log.info(
@@ -447,6 +448,7 @@ export class ConversationOrchestrator {
       state,
       events,
       currentMessage: message,
+      timezone: this.config.runtime.timezone,
     });
     if (decision.confidence < this.config.conversation.notEngaged.ambientConfidenceThreshold) {
       log.debug(
@@ -653,6 +655,7 @@ export class ConversationOrchestrator {
           events,
           targetMessageIds,
           task: reactionTask,
+          timezone: this.config.runtime.timezone,
         }),
         tools,
         allowEmptyText: true,
@@ -718,7 +721,7 @@ export class ConversationOrchestrator {
       messages: [
         ...input.context,
         {
-          role: "developer",
+          role: "system",
           content:
             "The previous response generation returned empty text. Produce the Discord reply now as plain message text only. Do not call tools.",
         },

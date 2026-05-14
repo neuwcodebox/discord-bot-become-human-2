@@ -22,6 +22,7 @@ export async function buildEngagementDecisionContext(input: {
   state: ConversationRuntimeState;
   events: NormalizedDiscordEvent[];
   currentMessage: NormalizedDiscordMessage;
+  timezone?: string;
 }): Promise<AgentContextMessage[]> {
   const [agents, docs] = await Promise.all([
     readFile(input.agentsPath, "utf8"),
@@ -31,27 +32,25 @@ export async function buildEngagementDecisionContext(input: {
     guildId: input.currentMessage.guildId,
     channelId: input.currentMessage.channelId,
     targetMessageIds: [input.currentMessage.id],
+    timezone: input.timezone ?? "UTC",
   });
   return [
     {
       role: "system",
-      content: `Decide whether the bot should join this Discord conversation. Output JSON only matching this TypeScript shape:\n${engagementShape}`,
-    },
-    {
-      role: "developer",
-      content: markdownSections({
-        "Runtime Instructions": agents,
-        "SOUL.md": docs.soul,
-        "GROUP.md": docs.group,
-        "Conversation State": JSON.stringify(stripRuntimeOnlyState(input.state), null, 2),
-      }),
+      content: sections(
+        `Decide whether the bot should join this Discord conversation. Output JSON only matching this TypeScript shape:\n${engagementShape}`,
+        block("instructions", agents),
+        block("soul", docs.soul),
+        block("group", docs.group),
+        block("conversation_state", JSON.stringify(stripRuntimeOnlyState(input.state), null, 2)),
+      ),
     },
     {
       role: "user",
-      content: markdownSections({
-        "Observed Discord Transcript": transcript,
-        "Current Message": JSON.stringify(input.currentMessage, null, 2),
-      }),
+      content: sections(
+        transcript,
+        block("current_message", JSON.stringify(input.currentMessage, null, 2)),
+      ),
     },
   ];
 }
@@ -62,6 +61,7 @@ export async function buildStayDecisionContext(input: {
   state: ConversationRuntimeState;
   events: NormalizedDiscordEvent[];
   currentMessage: NormalizedDiscordMessage;
+  timezone?: string;
 }): Promise<AgentContextMessage[]> {
   const [agents, docs] = await Promise.all([
     readFile(input.agentsPath, "utf8"),
@@ -71,28 +71,26 @@ export async function buildStayDecisionContext(input: {
     guildId: input.currentMessage.guildId,
     channelId: input.currentMessage.channelId,
     targetMessageIds: [input.currentMessage.id],
+    timezone: input.timezone ?? "UTC",
   });
   return [
     {
       role: "system",
-      content: `Decide whether to stay engaged and what action to take. Output JSON only matching this TypeScript shape:\n${stayShape}`,
-    },
-    {
-      role: "developer",
-      content: markdownSections({
-        "Runtime Instructions": agents,
-        "SOUL.md": docs.soul,
-        "GROUP.md": docs.group,
-        "Action Semantics": stayActionSemantics,
-        "Engagement State": JSON.stringify(stripRuntimeOnlyState(input.state), null, 2),
-      }),
+      content: sections(
+        `Decide whether to stay engaged and what action to take. Output JSON only matching this TypeScript shape:\n${stayShape}`,
+        block("instructions", agents),
+        block("soul", docs.soul),
+        block("group", docs.group),
+        block("action_semantics", stayActionSemantics),
+        block("engagement_state", JSON.stringify(stripRuntimeOnlyState(input.state), null, 2)),
+      ),
     },
     {
       role: "user",
-      content: markdownSections({
-        "Observed Discord Transcript": transcript,
-        "Current Message": JSON.stringify(input.currentMessage, null, 2),
-      }),
+      content: sections(
+        transcript,
+        block("current_message", JSON.stringify(input.currentMessage, null, 2)),
+      ),
     },
   ];
 }
@@ -129,39 +127,38 @@ export async function buildResponseContext(input: {
     guildId: latest?.guildId ?? "unknown",
     channelId: latest?.channelId ?? "unknown",
     targetMessageIds: input.targetMessageIds,
+    timezone: input.config.runtime.timezone,
   });
   const cappedTranscript = truncateText(transcript, input.config.context.maxTranscriptChars).text;
   return [
     {
       role: "system",
-      content:
+      content: sections(
         "Generate the actual Discord reply using ReAct-style tools when useful. Return only the message text that should be sent to Discord.",
-    },
-    {
-      role: "developer",
-      content: markdownSections({
-        "Runtime Instructions": agents,
-        "SOUL.md": docs.soul,
-        "GROUP.md": docs.group,
-        "TOOLS.md": docs.tools,
-        "Activated Skills": skills.map((skill) => skill.body).join("\n\n"),
-        "Response Guardrails": responseGuardrails,
-        "Response Task": JSON.stringify(input.task, null, 2),
-      }),
+        block("instructions", agents),
+        block("soul", docs.soul),
+        block("group", docs.group),
+        block("tools", docs.tools),
+        block("skills", skills.map((skill) => skill.body).join("\n\n")),
+        block("guardrails", responseGuardrails),
+        block("task", JSON.stringify(input.task, null, 2)),
+      ),
     },
     {
       role: "user",
-      content: markdownSections({
-        "Guild Memory": truncateText(memory.guildMemory, input.config.context.maxMemoryChars).text,
-        "Archived Conversation Summaries": archiveSummaries,
-        "Relevant User Profiles": profiles
-          .map(
-            (profile) =>
-              `## ${profile.userId}\n${truncateText(profile.profile, input.config.context.maxUserProfileChars).text}`,
-          )
-          .join("\n\n"),
-        "Observed Discord Transcript": cappedTranscript,
-      }),
+      content: sections(
+        block("memory", truncateText(memory.guildMemory, input.config.context.maxMemoryChars).text),
+        block("archive_summaries", archiveSummaries),
+        profiles.length > 0
+          ? `<user_profiles>\n${profiles
+              .map(
+                (profile) =>
+                  `<profile uid="${profile.userId}">\n${truncateText(profile.profile, input.config.context.maxUserProfileChars).text.trim()}\n</profile>`,
+              )
+              .join("\n")}\n</user_profiles>`
+          : undefined,
+        cappedTranscript,
+      ),
     },
   ];
 }
@@ -172,6 +169,7 @@ export async function buildReactionContext(input: {
   events: NormalizedDiscordEvent[];
   targetMessageIds: string[];
   task: StayDecision;
+  timezone?: string;
 }): Promise<AgentContextMessage[]> {
   const messages = materializeMessages(input.events);
   const latest = messages.at(-1);
@@ -183,29 +181,28 @@ export async function buildReactionContext(input: {
     guildId: latest?.guildId ?? "unknown",
     channelId: latest?.channelId ?? "unknown",
     targetMessageIds: input.targetMessageIds,
+    timezone: input.timezone ?? "UTC",
   });
   return [
     {
       role: "system",
-      content:
+      content: sections(
         "Add one natural Discord emoji reaction using the discord_react tool. Do not write a Discord message. Use exactly one tool call and then stop.",
-    },
-    {
-      role: "developer",
-      content: markdownSections({
-        "Runtime Instructions": agents,
-        "SOUL.md": docs.soul,
-        "GROUP.md": docs.group,
-        "Reaction Task": JSON.stringify(input.task, null, 2),
-      }),
+        block("instructions", agents),
+        block("soul", docs.soul),
+        block("group", docs.group),
+        block("task", JSON.stringify(input.task, null, 2)),
+      ),
     },
     {
       role: "user",
-      content: markdownSections({
-        "Observed Discord Transcript": transcript,
-        "Allowed Action":
-          "Choose a target from targetMessageIds and call discord_react with one fitting emoji. Common neutral examples include 👍, ✅, and 👀, but use SOUL.md, GROUP.md, and the transcript to choose naturally. Do not send text.",
-      }),
+      content: sections(
+        transcript,
+        block(
+          "allowed_action",
+          "Choose a target from targetMessageIds and call discord_react with one fitting emoji. Common neutral examples include 👍, ✅, and 👀, but use soul, group, and the transcript to choose naturally. Do not send text.",
+        ),
+      ),
     },
   ];
 }
@@ -226,35 +223,34 @@ export async function buildDreamContext(input: {
   return [
     {
       role: "system",
-      content:
+      content: sections(
         "You are running Dream memory maintenance. Edit durable memory conservatively using workspace file tools. Do not over-infer. Do not store one-off jokes, temporary tests, simple thanks, acknowledgements, or log/debug chatter as durable memory.",
-    },
-    {
-      role: "developer",
-      content: markdownSections({
-        "Runtime Instructions": agents,
-        "Activated Skills": skills.map((skill) => skill.body).join("\n\n"),
-        "Memory Guardrails": memoryGuardrails,
-        "Dream Scope": JSON.stringify(
-          {
-            reason: input.reason,
-            maxIterations: input.config.memory.dream.maxIterations,
-            allowEditSoul: input.config.memory.dream.allowEditSoul,
-            allowEditGroup: input.config.memory.dream.allowEditGroup,
-            allowEditUserProfiles: input.config.memory.dream.allowEditUserProfiles,
-          },
-          null,
-          2,
+        block("instructions", agents),
+        block("skills", skills.map((skill) => skill.body).join("\n\n")),
+        block("guardrails", memoryGuardrails),
+        block(
+          "scope",
+          JSON.stringify(
+            {
+              reason: input.reason,
+              maxIterations: input.config.memory.dream.maxIterations,
+              allowEditSoul: input.config.memory.dream.allowEditSoul,
+              allowEditGroup: input.config.memory.dream.allowEditGroup,
+              allowEditUserProfiles: input.config.memory.dream.allowEditUserProfiles,
+            },
+            null,
+            2,
+          ),
         ),
-      }),
+      ),
     },
     {
       role: "user",
-      content: markdownSections({
-        "New History Entries": input.history.map((entry) => JSON.stringify(entry)).join("\n"),
-        "Unprocessed Memory Inbox": input.inbox.map((entry) => JSON.stringify(entry)).join("\n"),
-        "Current MEMORY.md": input.memory,
-      }),
+      content: sections(
+        block("history", input.history.map((entry) => JSON.stringify(entry)).join("\n")),
+        block("inbox", input.inbox.map((entry) => JSON.stringify(entry)).join("\n")),
+        block("memory_doc", input.memory),
+      ),
     },
   ];
 }
@@ -267,10 +263,13 @@ function inferSkills(task: EngagementDecision | StayDecision): string[] {
   return [...names];
 }
 
-function markdownSections(sections: Record<string, string>): string {
-  return Object.entries(sections)
-    .map(([title, body]) => `# ${title}\n\n${body.trim()}`)
-    .join("\n\n");
+function block(tag: string, content: string): string | undefined {
+  const trimmed = content.trim();
+  return trimmed ? `<${tag}>\n${trimmed}\n</${tag}>` : undefined;
+}
+
+function sections(...blocks: Array<string | undefined>): string {
+  return blocks.filter((b): b is string => b !== undefined).join("\n\n");
 }
 
 function stripRuntimeOnlyState(

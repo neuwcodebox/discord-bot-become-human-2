@@ -53,16 +53,16 @@ describe("context builder", () => {
       ],
       currentMessage: message,
     });
-    const developerMessage = context.find((entry) => entry.role === "developer")?.content ?? "";
+    const systemMessage = context.find((entry) => entry.role === "system")?.content ?? "";
 
-    expect(developerMessage).toContain("lastBotMessageAt");
-    expect(developerMessage).toContain("Action Semantics");
-    expect(developerMessage).toContain("react:");
-    expect(developerMessage).toContain("one Discord emoji reaction only");
-    expect(developerMessage).toContain("Do not use wait because of cooldown");
-    expect(developerMessage).not.toContain("cooldownUntil");
-    expect(developerMessage).not.toContain("pendingFollowUp");
-    expect(developerMessage).not.toContain("waitCount");
+    expect(systemMessage).toContain("lastBotMessageAt");
+    expect(systemMessage).toContain("<action_semantics>");
+    expect(systemMessage).toContain("react:");
+    expect(systemMessage).toContain("one Discord emoji reaction only");
+    expect(systemMessage).toContain("Do not use wait because of cooldown");
+    expect(systemMessage).not.toContain("cooldownUntil");
+    expect(systemMessage).not.toContain("pendingFollowUp");
+    expect(systemMessage).not.toContain("waitCount");
   });
 
   it("builds reaction context that asks for a Discord reaction instead of a text reply", async () => {
@@ -100,7 +100,7 @@ describe("context builder", () => {
 
     expect(context[0]?.content).toContain("discord_react");
     expect(context[0]?.content).toContain("Do not write a Discord message");
-    expect(context.find((entry) => entry.role === "developer")?.content).toContain('"reactionHint": "ack"');
+    expect(context.find((entry) => entry.role === "system")?.content).toContain('"reactionHint": "ack"');
     expect(context.find((entry) => entry.role === "user")?.content).toContain('id="m1"');
     expect(context.find((entry) => entry.role === "user")?.content).toContain("target");
     expect(context.find((entry) => entry.role === "user")?.content).toContain("Common neutral examples");
@@ -137,12 +137,12 @@ describe("context builder", () => {
         expectedRole: "answer_question",
       },
     });
-    const developerMessage = context.find((entry) => entry.role === "developer")?.content ?? "";
+    const systemMessage = context.find((entry) => entry.role === "system")?.content ?? "";
 
-    expect(developerMessage).toContain("Response Guardrails");
-    expect(developerMessage).toContain("Focus on targetMessageIds");
-    expect(developerMessage).toContain("Do not mention internal JSON");
-    expect(developerMessage).toContain("Use tools only when they are actually needed");
+    expect(systemMessage).toContain("<guardrails>");
+    expect(systemMessage).toContain("Focus on targetMessageIds");
+    expect(systemMessage).toContain("Do not mention internal JSON");
+    expect(systemMessage).toContain("Use tools only when they are actually needed");
   });
 
   it("adds durable memory guardrails to Dream context", async () => {
@@ -161,7 +161,7 @@ describe("context builder", () => {
     });
     const allContent = context.map((entry) => entry.content).join("\n");
 
-    expect(allContent).toContain("Memory Guardrails");
+    expect(allContent).toContain("<guardrails>");
     expect(allContent).toContain("one-off jokes");
     expect(allContent).toContain("temporary tests");
     expect(allContent).toContain("simple thanks");
@@ -224,7 +224,7 @@ describe("context builder", () => {
     });
     const userMessage = context.find((entry) => entry.role === "user")?.content ?? "";
 
-    expect(userMessage).toContain("Archived Conversation Summaries");
+    expect(userMessage).toContain("<archive_summaries>");
     expect(userMessage).toContain("old useful context");
     expect(userMessage).toContain("... (truncated)");
   });

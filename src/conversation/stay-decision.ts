@@ -36,6 +36,7 @@ export async function decideStay(input: {
   state: ConversationRuntimeState;
   events: NormalizedDiscordEvent[];
   currentMessage: NormalizedDiscordMessage;
+  timezone?: string;
 }): Promise<StayDecision> {
   const messages = await buildStayDecisionContext(input);
   const result = await input.runner.run({

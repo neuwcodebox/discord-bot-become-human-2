@@ -70,12 +70,8 @@ export function normalizeContextMessages(
   contextWindow: number,
 ): AgentContextMessage[] {
   const perMessageLimit = config.context.maxContextMessageChars;
-  const instructions = messages.filter(
-    (message) => message.role === "system" || message.role === "developer",
-  );
-  const conversation = messages.filter(
-    (message) => message.role !== "system" && message.role !== "developer",
-  );
+  const instructions = messages.filter((message) => message.role === "system");
+  const conversation = messages.filter((message) => message.role !== "system");
   const cappedConversation = conversation.map((message) => ({
     ...message,
     content: truncateText(message.content, perMessageLimit).text,

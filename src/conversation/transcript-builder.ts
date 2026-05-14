@@ -2,15 +2,16 @@ import type { NormalizedDiscordEvent, NormalizedDiscordMessage } from "../types.
 
 export function buildTranscript(
   events: NormalizedDiscordEvent[],
-  options: { guildId: string; channelId: string; targetMessageIds?: string[] },
+  options: { guildId: string; channelId: string; targetMessageIds?: string[]; timezone: string },
 ): string {
+  const { timezone } = options;
   const targetIds = new Set(options.targetMessageIds ?? []);
   const messages = materializeMessages(events);
   const lines = [
     `<transcript guild="${attr(options.guildId)}" channel="${attr(options.channelId)}" order="oldest_to_newest">`,
   ];
   for (const message of messages) {
-    lines.push(renderMessage(message, targetIds.has(message.id)));
+    lines.push(renderMessage(message, targetIds.has(message.id), timezone));
   }
   lines.push("</transcript>");
   return lines.join("\n");
@@ -42,14 +43,13 @@ export function materializeMessages(events: NormalizedDiscordEvent[]): Normalize
   return [...byId.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
-function renderMessage(message: NormalizedDiscordMessage, target: boolean): string {
+function renderMessage(message: NormalizedDiscordMessage, target: boolean, timezone: string): string {
   const flags = [
     `id="${attr(message.id)}"`,
-    `uid="${attr(message.author.id)}"`,
-    `name="${attr(message.author.displayName)}"`,
-    `t="${attr(message.createdAt)}"`,
+    `author="${attr(message.author.displayName)}"`,
+    `t="${attr(formatTimestamp(message.createdAt, timezone))}"`,
     message.author.isBot ? "bot" : undefined,
-    message.editedAt ? "edited" : undefined,
+    message.editedAt ? `edited="${attr(formatTimestamp(message.editedAt, timezone))}"` : undefined,
     message.deletedAt ? "deleted" : undefined,
     target ? "target" : undefined,
   ].filter(Boolean);
@@ -58,7 +58,7 @@ function renderMessage(message: NormalizedDiscordMessage, target: boolean): stri
     const replyFlags = [
       `id="${attr(message.replyTo.messageId)}"`,
       message.replyTo.authorId ? `uid="${attr(message.replyTo.authorId)}"` : undefined,
-      message.replyTo.authorDisplayName ? `name="${attr(message.replyTo.authorDisplayName)}"` : undefined,
+      message.replyTo.authorDisplayName ? `author="${attr(message.replyTo.authorDisplayName)}"` : undefined,
     ].filter(Boolean);
     lines.push(`    <reply ${replyFlags.join(" ")}>`);
     if (message.replyTo.contentPreview) lines.push(`      <text>${message.replyTo.contentPreview}</text>`);
@@ -108,10 +108,37 @@ function renderMessage(message: NormalizedDiscordMessage, target: boolean): stri
     }
     lines.push("    </rxs>");
   }
-  if (message.editedAt) lines.push(`    <edit t="${attr(message.editedAt)}" />`);
-  if (message.deletedAt) lines.push(`    <deleted t="${attr(message.deletedAt)}" />`);
+  if (message.deletedAt) lines.push(`    <deleted t="${attr(formatTimestamp(message.deletedAt, timezone))}" />`);
   lines.push("  </msg>");
   return lines.join("\n");
+}
+
+function formatTimestamp(isoString: string, timezone: string): string {
+  const date = new Date(isoString);
+
+  const offsetParts = new Intl.DateTimeFormat("en", {
+    timeZone: timezone,
+    timeZoneName: "longOffset",
+  }).formatToParts(date);
+  const gmtOffset = offsetParts.find((p) => p.type === "timeZoneName")?.value ?? "GMT";
+  const offset = gmtOffset === "GMT" ? "+00:00" : gmtOffset.slice(3);
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  const ms = String(date.getMilliseconds()).padStart(3, "0");
+
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}.${ms}${offset}`;
 }
 
 function attr(value: string): string {

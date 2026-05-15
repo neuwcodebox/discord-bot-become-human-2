@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  buildDreamContext,
+  buildDreamPhase1Context,
   buildReactionContext,
   buildResponseContext,
   buildStayDecisionContext,
@@ -150,12 +150,14 @@ describe("context builder", () => {
     const agentsPath = join(root, "AGENTS.md");
     await writeFile(agentsPath, "runtime instructions", "utf8");
 
-    const context = await buildDreamContext({
+    const context = await buildDreamPhase1Context({
       agentsPath,
       workspaceRoot: root,
       history: [],
       inbox: [],
       memory: "",
+      userFiles: new Map(),
+      existingSkillNames: [],
       config: defaultConfig,
       reason: "test",
     });

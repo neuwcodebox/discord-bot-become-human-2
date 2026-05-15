@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { parseDocument } from "yaml";
 
 export type SkillMetadata = {
@@ -11,6 +11,11 @@ export type SkillMetadata = {
 
 export type LoadedSkill = SkillMetadata & {
   body: string;
+};
+
+export type SkillsContext = {
+  alwaysLoaded: LoadedSkill[];
+  summary: string;
 };
 
 export class SkillLoader {
@@ -52,9 +57,28 @@ export class SkillLoader {
     return Promise.all(
       selected.map(async (skill) => ({
         ...skill,
-        body: await readFile(skill.path, "utf8"),
+        body: stripFrontmatter(await readFile(skill.path, "utf8")),
       })),
     );
+  }
+
+  async buildSkillsContext(): Promise<SkillsContext> {
+    const discovered = await this.discover();
+    const alwaysSkills = discovered.filter((s) => s.always === true);
+    const otherSkills = discovered.filter((s) => s.always !== true);
+
+    const alwaysLoaded: LoadedSkill[] = await Promise.all(
+      alwaysSkills.map(async (skill) => ({
+        ...skill,
+        body: stripFrontmatter(await readFile(skill.path, "utf8")),
+      })),
+    );
+
+    const summary = otherSkills
+      .map((s) => `- **${s.name}** — ${s.description}  \`${relative(this.workspaceRoot, s.path)}\``)
+      .join("\n");
+
+    return { alwaysLoaded, summary };
   }
 }
 
@@ -75,4 +99,12 @@ function parseSkillMarkdown(raw: string): {
   if (typeof parsed?.description === "string") metadata.description = parsed.description;
   if (typeof parsed?.always === "boolean") metadata.always = parsed.always;
   return { metadata };
+}
+
+function stripFrontmatter(raw: string): string {
+  if (!raw.startsWith("---\n")) return raw;
+  const end = raw.indexOf("\n---", 4);
+  if (end === -1) return raw;
+  const after = raw.slice(end + 4);
+  return (after.startsWith("\n") ? after.slice(1) : after).trimStart();
 }

@@ -66,7 +66,6 @@ async function repairWorkspace(workspaceRoot: string, templateRoot: string): Pro
   for (const skill of [
     "memory",
     "skill-creator",
-    "summarize",
     "weather",
     "workspace-files",
     "discord-actions",

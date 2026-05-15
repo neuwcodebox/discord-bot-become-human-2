@@ -9,8 +9,6 @@ import { fetchUrl } from "./fetch-url.js";
 import { memoryPropose, memoryRead } from "./memory.js";
 import { sandboxExec } from "./sandbox-exec.js";
 import { searchInternet } from "./search-internet.js";
-import { summarizeText } from "./summarize.js";
-import { weatherLookup } from "./weather.js";
 import { workspaceRead, workspaceSearch, workspaceWrite } from "./workspace-files.js";
 
 const log = childLogger("tools");
@@ -85,28 +83,6 @@ export function createToolRegistry(
       }),
       execute: async (_toolCallId, params) => {
         return jsonResult(await memoryPropose(context, { ...params, source: "conversation" }));
-      },
-    });
-  }
-  if (config.tools.summarize) {
-    addTool(tools, {
-      name: "summarize_text",
-      label: "Summarize Text",
-      description: "Compress a long text without inventing facts.",
-      parameters: Type.Object({ text: Type.String(), maxChars: Type.Optional(Type.Number()) }),
-      execute: async (_toolCallId, params) => {
-        return jsonResult(await summarizeText(params));
-      },
-    });
-  }
-  if (config.tools.weather) {
-    addTool(tools, {
-      name: "weather_lookup",
-      label: "Weather Lookup",
-      description: "Look up weather or forecast information for a location.",
-      parameters: Type.Object({ location: Type.String(), date: Type.Optional(Type.String()) }),
-      execute: async (_toolCallId, params) => {
-        return jsonResult(await weatherLookup(params));
       },
     });
   }

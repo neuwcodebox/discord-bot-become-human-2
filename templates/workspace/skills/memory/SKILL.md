@@ -1,11 +1,24 @@
 ---
 name: memory
-description: Use this skill to manage long-term memory candidates and durable memory files.
+description: Manage durable guild memory and user profiles. Use when you want to remember a fact, update what you know about a user, check existing memory, or process memory inbox candidates.
+always: true
 ---
 
 # Memory Skill
 
-Use durable memory conservatively. Put group-wide facts in `memory/MEMORY.md` and user-specific facts in
-`users/<discord_user_id>/USER.md`. Prefer evidence-backed, stable information over guesses.
+## Guild Memory
+Durable group-wide facts live in `memory/MEMORY.md`. Read with `memory_read` or `workspace_read`.
+Write updates with `workspace_write`. Edit conservatively — only add or change information that is
+likely to remain useful in future conversations.
 
-When reviewing `memory/inbox.jsonl`, keep only information that is likely to matter later.
+## User Profiles
+Per-user facts live in `users/<discord_user_id>/USER.md`. Update when a user shares stable personal
+information (preferences, location, role, etc.). Do not store guesses, secrets, or one-off jokes.
+
+## Memory Inbox
+Pending candidates are appended to `memory/inbox.jsonl` via `memory_propose`. During Dream runs,
+review inbox entries and promote worthy ones to `memory/MEMORY.md` or the appropriate user profile.
+
+## Write Policy
+Prefer evidence-backed, stable information over inferences. Do not store temporary context,
+transient chatter, or test messages as durable memory.

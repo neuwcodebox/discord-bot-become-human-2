@@ -102,11 +102,10 @@ export async function buildResponseContext(input: {
   events: NormalizedDiscordEvent[];
   targetMessageIds: string[];
   task: EngagementDecision | StayDecision;
-  skillNames?: string[];
 }): Promise<AgentContextMessage[]> {
   const messages = materializeMessages(input.events);
   const latest = messages.at(-1);
-  const [agents, docs, memory, archiveSummaries, skills, profiles] = await Promise.all([
+  const [agents, docs, memory, archiveSummaries, skillsCtx, profiles] = await Promise.all([
     readFile(input.agentsPath, "utf8"),
     loadWorkspaceDocuments(input.workspaceRoot),
     loadMemory(input.workspaceRoot),
@@ -115,7 +114,7 @@ export async function buildResponseContext(input: {
       config: input.config,
       ...(latest?.channelId ? { channelId: latest.channelId } : {}),
     }),
-    new SkillLoader(input.workspaceRoot).load(input.skillNames ?? inferSkills(input.task)),
+    new SkillLoader(input.workspaceRoot).buildSkillsContext(),
     loadRelevantUserProfiles(
       input.workspaceRoot,
       messages,
@@ -139,7 +138,17 @@ export async function buildResponseContext(input: {
         block("soul", docs.soul),
         block("group", docs.group),
         block("tools", docs.tools),
-        block("skills", skills.map((skill) => skill.body).join("\n\n")),
+        block(
+          "skills",
+          sections(
+            skillsCtx.alwaysLoaded.length > 0
+              ? skillsCtx.alwaysLoaded.map((s) => s.body).join("\n\n")
+              : undefined,
+            skillsCtx.summary
+              ? `To use a skill, read its SKILL.md file with workspace_read.\n\n${skillsCtx.summary}`
+              : undefined,
+          ),
+        ),
         block("guardrails", responseGuardrails),
         block("task", JSON.stringify(input.task, null, 2)),
       ),
@@ -253,14 +262,6 @@ export async function buildDreamContext(input: {
       ),
     },
   ];
-}
-
-function inferSkills(task: EngagementDecision | StayDecision): string[] {
-  const text = JSON.stringify(task).toLowerCase();
-  const names = new Set<string>(["memory", "workspace-files", "discord-actions"]);
-  if (text.includes("weather")) names.add("weather");
-  if (text.includes("summar")) names.add("summarize");
-  return [...names];
 }
 
 function block(tag: string, content: string): string | undefined {

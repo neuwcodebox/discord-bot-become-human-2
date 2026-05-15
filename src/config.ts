@@ -134,8 +134,6 @@ const configSchema = z.object({
   tools: z.object({
     workspaceFiles: z.boolean(),
     memory: z.boolean(),
-    summarize: z.boolean(),
-    weather: z.boolean(),
     discordActions: z.boolean(),
     fetchUrl: z.boolean(),
     readAttachment: z.boolean(),
@@ -255,8 +253,6 @@ export const defaultConfig: AppConfig = {
   tools: {
     workspaceFiles: true,
     memory: true,
-    summarize: true,
-    weather: true,
     discordActions: true,
     fetchUrl: true,
     readAttachment: true,

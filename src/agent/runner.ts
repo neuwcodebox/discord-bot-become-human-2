@@ -103,18 +103,6 @@ async function runAgent(
 ): Promise<AgentRunResult> {
   const { messages, startedAt, langfuse } = opts;
 
-  const langfuseObserver = langfuse
-    ? createLangfuseAgentObserver({
-        langfuse,
-        ...(request.traceLabel !== undefined ? { traceLabel: request.traceLabel } : {}),
-        sessionId: request.sessionId,
-        model: model.id,
-        provider: model.provider,
-        inputMessages: messages,
-        startedAt,
-      })
-    : null;
-
   const normalizedSystemPrompt = messages
     .filter((message) => message.role === "system")
     .map((message) => message.content)
@@ -126,6 +114,21 @@ async function runAgent(
       content: [{ type: "text", text: message.content }],
       timestamp: Date.now(),
     }));
+  let latestGenerationMessages: AgentMessage[] = prompts.slice();
+
+  const langfuseObserver = langfuse
+    ? createLangfuseAgentObserver({
+        langfuse,
+        ...(request.traceLabel !== undefined ? { traceLabel: request.traceLabel } : {}),
+        sessionId: request.sessionId,
+        model: model.id,
+        provider: model.provider,
+        systemPrompt: normalizedSystemPrompt,
+        inputMessages: messages,
+        getGenerationMessages: () => latestGenerationMessages,
+        startedAt,
+      })
+    : null;
 
   const agent = new Agent({
     sessionId: request.sessionId,
@@ -137,6 +140,10 @@ async function runAgent(
     },
     getApiKey: opts.getApiKey,
     ...(opts.transport !== undefined ? { transport: opts.transport } : {}),
+    transformContext: async (contextMessages) => {
+      latestGenerationMessages = contextMessages.slice();
+      return contextMessages;
+    },
     afterToolCall: async (context) => normalizeToolResult(context.result, config.context.maxToolResultChars),
   });
   log.info(

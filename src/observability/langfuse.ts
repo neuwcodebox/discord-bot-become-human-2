@@ -82,7 +82,9 @@ export type LangfuseAgentObserverOptions = {
   sessionId: string;
   model: string;
   provider: string;
+  systemPrompt?: string;
   inputMessages: AgentContextMessage[];
+  getGenerationMessages?: () => AgentMessage[] | undefined;
   startedAt: number;
 };
 
@@ -118,6 +120,7 @@ type AssistantGenerationOutput =
 
 export function createLangfuseAgentObserver(options: LangfuseAgentObserverOptions): LangfuseAgentObserver {
   const inputMessages = summarizeInputMessages(options.inputMessages);
+  const initialGenerationInput = generationInputFromContextMessages(inputMessages);
   const trace = options.langfuse.trace({
     name: options.traceLabel ?? "agent-run",
     timestamp: new Date(options.startedAt),
@@ -150,7 +153,7 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
       generation: trace.generation({
         name: "llm-response",
         startTime: new Date(),
-        input: inputMessages,
+        input: currentGenerationInput(),
         model: event.message.model || options.model,
         metadata: {
           provider: event.message.provider || options.provider,
@@ -161,6 +164,16 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
       turnIndex: turnCount + 1,
       startOrder: order,
     };
+  }
+
+  function currentGenerationInput(): unknown {
+    try {
+      const messages = options.getGenerationMessages?.();
+      if (messages) return summarizeGenerationInput(options.systemPrompt, messages);
+    } catch {
+      // Observability must never change agent behavior.
+    }
+    return initialGenerationInput;
   }
 
   function handleMessageEnd(event: Extract<AgentEvent, { type: "message_end" }>): void {
@@ -393,6 +406,76 @@ function summarizeInputMessages(messages: AgentContextMessage[]): Array<Record<s
     content: message.content,
     contentLength: message.content.length,
   }));
+}
+
+function generationInputFromContextMessages(
+  messages: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return messages.map((message) => ({ ...message }));
+}
+
+function summarizeGenerationInput(
+  systemPrompt: string | undefined,
+  messages: AgentMessage[],
+): Array<Record<string, unknown>> {
+  const input: Array<Record<string, unknown>> = [];
+  if (systemPrompt && systemPrompt.length > 0) {
+    input.push({ role: "system", content: systemPrompt, contentLength: systemPrompt.length });
+  }
+  for (const message of messages) {
+    input.push(summarizeAgentMessageInput(message));
+  }
+  return input;
+}
+
+function summarizeAgentMessageInput(message: AgentMessage): Record<string, unknown> {
+  switch (message.role) {
+    case "user": {
+      const content = summarizeMessageContent(message.content);
+      return {
+        role: "user",
+        content,
+        contentLength: summarizedContentLength(content),
+      };
+    }
+    case "assistant":
+      return {
+        role: "assistant",
+        content: assistantGenerationOutput(message.content),
+        stopReason: message.stopReason,
+        model: message.model,
+      };
+    case "toolResult": {
+      const content = summarizeMessageContent(message.content);
+      return {
+        role: "toolResult",
+        toolCallId: message.toolCallId,
+        toolName: message.toolName,
+        isError: message.isError,
+        content,
+        contentLength: summarizedContentLength(content),
+      };
+    }
+  }
+}
+
+function summarizeMessageContent(
+  content:
+    | Extract<AgentMessage, { role: "user" }>["content"]
+    | Extract<AgentMessage, { role: "toolResult" }>["content"],
+): unknown {
+  if (typeof content === "string") return content;
+  return content.map((part) => {
+    if (part.type === "text") {
+      return { type: "text", text: part.text, contentLength: part.text.length };
+    }
+    return { type: "image", mimeType: part.mimeType, dataLength: part.data.length };
+  });
+}
+
+function summarizedContentLength(content: unknown): number {
+  if (typeof content === "string") return content.length;
+  return safeSerialize(content).length;
 }
 
 function extractFinalAssistantText(messages: AgentMessage[]): string {

@@ -249,6 +249,57 @@ describe("langfuse observability", () => {
       },
     });
   });
+
+  it("records the current ReAct context as generation input when available", async () => {
+    const langfuse = new FakeLangfuse();
+    const observer = createLangfuseAgentObserver({
+      langfuse,
+      sessionId: "session-react",
+      model: "gpt-test",
+      provider: "openai",
+      systemPrompt: "runtime policy",
+      inputMessages: [
+        { role: "system", content: "runtime policy" },
+        { role: "user", content: "initial task" },
+      ],
+      getGenerationMessages: () => [
+        {
+          role: "user",
+          content: [{ type: "text", text: "initial task" }],
+          timestamp: 1000,
+        },
+        assistantMessage([
+          { type: "toolCall", id: "call-1", name: "workspace_read", arguments: { path: "a.txt" } },
+        ]),
+        toolResultMessage("call-1", "workspace_read"),
+      ],
+      startedAt: 1000,
+    });
+
+    await observer.handleEvent({ type: "message_start", message: assistantMessage([]) });
+
+    const generationInput = langfuse.traces[0]?.generations[0]?.body.input;
+    expect(generationInput).toEqual([
+      { role: "system", content: "runtime policy", contentLength: 14 },
+      expect.objectContaining({
+        role: "user",
+        content: [{ type: "text", text: "initial task", contentLength: 12 }],
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        content: {
+          toolCalls: [{ id: "call-1", name: "workspace_read", arguments: '{\n  "path": "a.txt"\n}' }],
+        },
+      }),
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "workspace_read",
+        content: [{ type: "text", text: "result", contentLength: 6 }],
+      }),
+    ]);
+    expect(generationInput).not.toBe("initial task");
+  });
 });
 
 function assistantMessage(content: AssistantContent): Extract<AgentMessage, { role: "assistant" }> {

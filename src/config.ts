@@ -261,7 +261,7 @@ export const defaultConfig: AppConfig = {
   },
   sandbox: {
     enabled: true,
-    network: false,
+    network: true,
     timeoutMs: 30000,
     outputLimitBytes: 131072,
   },

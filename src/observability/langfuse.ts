@@ -117,11 +117,12 @@ type AssistantGenerationOutput =
     };
 
 export function createLangfuseAgentObserver(options: LangfuseAgentObserverOptions): LangfuseAgentObserver {
+  const inputMessages = summarizeInputMessages(options.inputMessages);
   const trace = options.langfuse.trace({
     name: options.traceLabel ?? "agent-run",
     timestamp: new Date(options.startedAt),
     sessionId: options.sessionId,
-    input: summarizeInputMessages(options.inputMessages),
+    input: inputMessages,
     metadata: {
       model: options.model,
       provider: options.provider,
@@ -149,7 +150,7 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
       generation: trace.generation({
         name: "llm-response",
         startTime: new Date(),
-        input: latestUserInput(options.inputMessages),
+        input: inputMessages,
         model: event.message.model || options.model,
         metadata: {
           provider: event.message.provider || options.provider,
@@ -392,12 +393,6 @@ function summarizeInputMessages(messages: AgentContextMessage[]): Array<Record<s
     content: message.content,
     contentLength: message.content.length,
   }));
-}
-
-function latestUserInput(messages: AgentContextMessage[]): string | undefined {
-  const message = messages.findLast((candidate) => candidate.role === "user");
-  if (!message) return undefined;
-  return message.content;
 }
 
 function extractFinalAssistantText(messages: AgentMessage[]): string {

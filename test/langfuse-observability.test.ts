@@ -102,7 +102,11 @@ describe("langfuse observability", () => {
       sessionId: "session-1",
       model: "gpt-test",
       provider: "openai",
-      inputMessages: [{ role: "user", content: "please use tools" }],
+      inputMessages: [
+        { role: "system", content: "runtime policy" },
+        { role: "user", content: "conversation transcript" },
+        { role: "user", content: "please use tools" },
+      ],
       startedAt: 1000,
     });
 
@@ -129,8 +133,16 @@ describe("langfuse observability", () => {
     });
 
     const trace = langfuse.traces[0];
+    const expectedInput = [
+      { role: "system", content: "runtime policy", contentLength: 14 },
+      { role: "user", content: "conversation transcript", contentLength: 23 },
+      { role: "user", content: "please use tools", contentLength: 16 },
+    ];
+    expect(trace?.body?.input).toEqual(expectedInput);
     expect(trace?.generations).toHaveLength(1);
     expect(trace?.spans).toHaveLength(2);
+    expect(trace?.generations[0]?.body.input).toEqual(expectedInput);
+    expect(trace?.generations[0]?.body.input).not.toBe("please use tools");
     expect(trace?.generations[0]?.body.metadata).toMatchObject({ eventOrder: 1 });
     expect(trace?.generations[0]?.ended?.output).toMatchObject({
       text: "checking",

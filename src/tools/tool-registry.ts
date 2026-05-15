@@ -6,7 +6,7 @@ import type { AppConfig, RuntimeAgentTool, ToolContext } from "../types.js";
 import { readAttachmentToolContent } from "./attachment.js";
 import type { DiscordActionRuntime } from "./discord-actions.js";
 import { fetchUrl } from "./fetch-url.js";
-import { memoryPropose, memoryRead } from "./memory.js";
+import { memoryPropose } from "./memory.js";
 import { sandboxExec } from "./sandbox-exec.js";
 import { searchInternet } from "./search-internet.js";
 import { workspaceRead, workspaceSearch, workspaceWrite } from "./workspace-files.js";
@@ -64,13 +64,6 @@ export function createToolRegistry(
     });
   }
   if (config.tools.memory) {
-    addTool(tools, {
-      name: "memory_read",
-      label: "Read Memory",
-      description: "Read guild-level MEMORY.md.",
-      parameters: Type.Object({}),
-      execute: async () => textResult(await memoryRead(context)),
-    });
     addTool(tools, {
       name: "memory_propose",
       label: "Propose Memory",

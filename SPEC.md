@@ -152,8 +152,6 @@ model: gpt-5.5
             SKILL.md
           skill-creator/
             SKILL.md
-          summarize/
-            SKILL.md
           weather/
             SKILL.md
           workspace-files/
@@ -187,8 +185,6 @@ project/
         memory/
           SKILL.md
         skill-creator/
-          SKILL.md
-        summarize/
           SKILL.md
         weather/
           SKILL.md
@@ -317,12 +313,11 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
   "tools": {
     "workspaceFiles": true,
     "memory": true,
-    "summarize": true,
-    "weather": true,
     "discordActions": true,
     "fetchUrl": true,
     "readAttachment": true,
-    "sandboxExec": true
+    "sandboxExec": true,
+    "searchInternet": false
   },
   "sandbox": {
     "enabled": true,
@@ -616,7 +611,6 @@ Agent Skills 공식 사양은 https://agentskills.io/specification 를 따른다
 ```txt
 memory
 skill-creator
-summarize
 weather
 workspace-files
 discord-actions
@@ -630,13 +624,9 @@ discord-actions
 
 guild workspace의 `skills/` 아래에 새 skill을 만들거나 기존 workspace skill을 수정한다. repo template과 `resources/AGENTS.md`는 수정 대상이 아니다.
 
-#### summarize
-
-긴 대화, 링크 내용, 첨부 설명, 과거 맥락을 압축한다.
-
 #### weather
 
-날씨 관련 대화에 사용한다.
+날씨 관련 대화에 사용한다. 전용 tool 없이 `sandbox_exec`로 curl을 실행한다.
 
 #### workspace-files
 
@@ -1016,6 +1006,9 @@ discord_get_channel
 
 discord_search_history
   현재 guild workspace의 events.jsonl/history.jsonl 검색
+
+discord_send_message
+  현재 채널에 독립 메시지 전송 (주 응답 외 추가 메시지가 필요한 경우에만 사용)
 ```
 
 `discord_delete_own`은 봇 자신이 보낸 메시지만 삭제할 수 있다.
@@ -1045,13 +1038,11 @@ discord_search_history
 workspace_read
 workspace_write
 workspace_search
-memory_read
 memory_propose
-summarize_text
-weather_lookup
 sandbox_exec
 read_attachment
 fetch_url
+search_internet  (search 설정이 있을 때만 등록)
 ```
 
 모든 도구는 현재 guild context를 받는다.
@@ -1891,13 +1882,12 @@ src/
   tools/
     workspace-files.ts
     memory.ts
-    summarize.ts
-    weather.ts
     discord-actions.ts
     sandbox-exec.ts
     bwrap.ts
     attachment.ts
     fetch-url.ts
+    search-internet.ts
 
   storage/
     jsonl.ts
@@ -1992,7 +1982,7 @@ src/
 - workspace files
 - read_attachment
 - fetch_url
-- weather_lookup
+- search_internet
 - discord actions
 - sandbox_exec with bwrap
 ```
@@ -2033,7 +2023,7 @@ Runtime root is `~/.discord-bot-become-human-2`. Store `config.json` and `codex-
 
 Each guild workspace contains `SOUL.md`, `GROUP.md`, `TOOLS.md`, server memory files under `memory/`, per-user profiles under `users/<discord_user_id>/USER.md`, and copied workspace skills. Treat each guild as an isolated world. The same Discord user in different guilds gets separate user profile files.
 
-Builtin skills are `memory`, `skill-creator`, `summarize`, `weather`, `workspace-files`, and `discord-actions`. A skill is a self-contained directory with `SKILL.md` plus optional `scripts/`, `references/`, and `assets/`. Follow the Agent Skills specification at https://agentskills.io/specification. Runtime skill edits affect only the current guild workspace copy.
+Builtin skills are `memory`, `skill-creator`, `weather`, `workspace-files`, and `discord-actions`. A skill is a self-contained directory with `SKILL.md` plus optional `scripts/`, `references/`, and `assets/`. Follow the Agent Skills specification at https://agentskills.io/specification. Runtime skill edits affect only the current guild workspace copy.
 
 Preserve Discord-native context: guild, channel, thread, stable user IDs, display names, replies, referenced messages, attachments, embeds, links, reactions, edits, deletions, and timing.
 

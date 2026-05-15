@@ -7,7 +7,7 @@ always: true
 # Memory Skill
 
 ## Guild Memory
-Durable group-wide facts live in `memory/MEMORY.md`. Read with `memory_read` or `workspace_read`.
+Durable group-wide facts live in `memory/MEMORY.md`. Already injected into context; read with `workspace_read` if you need the full file.
 Write updates with `workspace_write`. Edit conservatively — only add or change information that is
 likely to remain useful in future conversations.
 

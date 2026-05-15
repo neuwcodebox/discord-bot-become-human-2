@@ -1057,7 +1057,7 @@ type ToolContext = {
 };
 ```
 
-파일 관련 도구는 workspace guard를 통과해야 한다. `fetch_url`은 별도 네트워크 도구이며 size limit, content-type limit, timeout을 가져야 한다. `sandbox_exec`의 network는 기본적으로 꺼져 있다.
+파일 관련 도구는 workspace guard를 통과해야 한다. `fetch_url`은 별도 네트워크 도구이며 size limit, content-type limit, timeout을 가져야 한다. HTTP 실패 응답은 status code, status text, content-type, 최종 URL, 제한된 body preview를 에러 정보로 제공해야 한다. `sandbox_exec`의 network는 기본적으로 꺼져 있다.
 
 ---
 

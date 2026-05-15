@@ -135,7 +135,8 @@ function renderMessage(message: NormalizedDiscordMessage, target: boolean, timez
     }
     lines.push("    </rxs>");
   }
-  if (message.deletedAt) lines.push(`    <deleted t="${attr(formatTimestamp(message.deletedAt, timezone))}" />`);
+  if (message.deletedAt)
+    lines.push(`    <deleted t="${attr(formatTimestamp(message.deletedAt, timezone))}" />`);
   lines.push("  </msg>");
   return lines.join("\n");
 }

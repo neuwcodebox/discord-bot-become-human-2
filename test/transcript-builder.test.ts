@@ -28,7 +28,16 @@ describe("transcript builder", () => {
             authorId: "u1",
             authorDisplayName: "neuw",
             contentPreview: "hello",
-            attachments: [{ id: "ra1", url: "https://cdn.example/r.png", filename: "r.png", mimeType: "image/png", size: 2, kind: "image" as const }],
+            attachments: [
+              {
+                id: "ra1",
+                url: "https://cdn.example/r.png",
+                filename: "r.png",
+                mimeType: "image/png",
+                size: 2,
+                kind: "image" as const,
+              },
+            ],
             embeds: [{ title: "reply-embed", description: "reply-desc" }],
           },
           attachments: [

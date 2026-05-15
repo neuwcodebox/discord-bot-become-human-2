@@ -63,13 +63,7 @@ async function repairWorkspace(workspaceRoot: string, templateRoot: string): Pro
   for (const name of ["SOUL.md", "GROUP.md", "TOOLS.md", "memory/MEMORY.md"]) {
     await copyTemplateIfMissing(templateRoot, workspaceRoot, name);
   }
-  for (const skill of [
-    "memory",
-    "skill-creator",
-    "weather",
-    "workspace-files",
-    "discord-actions",
-  ]) {
+  for (const skill of ["memory", "skill-creator", "weather", "workspace-files", "discord-actions"]) {
     await copyTemplateIfMissing(templateRoot, workspaceRoot, `skills/${skill}/SKILL.md`);
   }
   for (const file of emptyJsonlFiles) {

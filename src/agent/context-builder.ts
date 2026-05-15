@@ -47,10 +47,7 @@ export async function buildEngagementDecisionContext(input: {
     },
     {
       role: "user",
-      content: sections(
-        transcript,
-        block("current_message", JSON.stringify(input.currentMessage, null, 2)),
-      ),
+      content: sections(transcript, block("current_message", JSON.stringify(input.currentMessage, null, 2))),
     },
   ];
 }
@@ -87,10 +84,7 @@ export async function buildStayDecisionContext(input: {
     },
     {
       role: "user",
-      content: sections(
-        transcript,
-        block("current_message", JSON.stringify(input.currentMessage, null, 2)),
-      ),
+      content: sections(transcript, block("current_message", JSON.stringify(input.currentMessage, null, 2))),
     },
   ];
 }

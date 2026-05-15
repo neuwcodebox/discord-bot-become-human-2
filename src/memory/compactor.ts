@@ -73,7 +73,11 @@ export function buildCompactionSummaryContext(
 ): AgentContextMessage[] {
   const first = events[0];
   const transcript = first
-    ? buildTranscript(events, { guildId: first.guildId, channelId: first.channelId, timezone: timezone ?? "UTC" })
+    ? buildTranscript(events, {
+        guildId: first.guildId,
+        channelId: first.channelId,
+        timezone: timezone ?? "UTC",
+      })
     : "";
   return [
     {

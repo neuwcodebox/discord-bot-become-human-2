@@ -1084,7 +1084,7 @@ type ToolContext = {
 --ro-bind /lib64 /lib64
 ```
 
-기본 정책:
+기본 정책 (`sandbox.enabled: true` — bwrap 사용):
 
 ```txt
 - network off
@@ -1092,10 +1092,21 @@ type ToolContext = {
 - stdout/stderr cap
 - workspace 밖 path reject
 - symlink traversal reject
-- raw shell fallback 없음
 ```
 
-bwrap가 없는 환경에서는 `sandbox_exec`를 사용할 수 없다고 보고한다. raw shell fallback은 제공하지 않는다.
+`sandbox.enabled: false` — bwrap 미사용 시 소프트웨어 정책:
+
+```txt
+- cwd를 guild workspace로 고정
+- shell: false (shell 해석 없음 — |, &&, $() 등 무력화)
+- stdin 차단
+- 환경변수 정화: 키 이름에 TOKEN/KEY/SECRET/PASSWORD/AUTH/CREDENTIAL이 포함된 변수 제거
+- 셸 인터프리터(sh, bash, zsh, fish, dash, ksh, tcsh, csh, cmd, powershell, pwsh) 실행 차단
+- timeout/stdout/stderr cap 동일 적용
+```
+
+`sandbox.enabled: true`일 때 bwrap가 설치되지 않은 환경에서는 에러를 보고한다.
+`sandbox.enabled: false`이면 bwrap 없이 workspace 디렉터리에서 직접 실행한다. OS 수준 격리는 제공되지 않는다.
 
 ---
 
@@ -2006,8 +2017,8 @@ src/
 - response generation은 ReAct agent run으로 수행한다.
 - Dream memory 관리도 agent run으로 수행한다.
 - 응답 스트리밍은 Discord message edit과 multi-message continuation으로 처리한다.
-- bwrap sandbox는 현재 guild workspace만 writable로 bind한다.
-- raw shell fallback은 없다.
+- bwrap sandbox는 현재 guild workspace만 writable로 bind한다 (sandbox.enabled: true).
+- sandbox.enabled: false이면 bwrap 없이 직접 실행하며 소프트웨어 보안 정책(cwd 고정, env 정화, 셸 차단)을 적용한다.
 - AGENTS.md는 프로젝트 소스의 공용 read-only instruction으로만 사용한다.
 ```
 

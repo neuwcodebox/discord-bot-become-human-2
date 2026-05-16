@@ -10,7 +10,7 @@ Each server gets an isolated workspace that keeps the bot's identity, long-term 
 - Node.js 24+
 - A Discord bot account (create one at the Developer Portal)
 - OpenAI Codex account — or any OpenAI-compatible endpoint (OpenAI, OpenRouter, local models, etc.)
-- bubblewrap (`bwrap`) — required for sandboxed code execution, Linux only
+- bubblewrap (`bwrap`) — required for sandboxed code execution, Linux only (only needed when `sandbox.enabled: true`)
 
 ```bash
 # Debian/Ubuntu
@@ -22,6 +22,8 @@ sudo pacman -S bubblewrap
 # Fedora
 sudo dnf install bubblewrap
 ```
+
+On Windows or environments where bwrap is unavailable, set `sandbox.enabled: false` in `config.json` to run without bwrap. Note that OS-level isolation is not provided in this mode — use it only in trusted environments.
 
 ---
 
@@ -343,8 +345,8 @@ Toggles for each tool available to the bot. All default to `true`.
 
 | Key | Default | Description |
 |---|---|---|
-| `enabled` | `true` | Enable bwrap sandbox isolation |
-| `network` | `true` | Allow network access inside the sandbox |
+| `enabled` | `true` | `true`: OS-level isolation via bwrap. `false`: direct execution without bwrap (cwd fixed, env sanitized, shell interpreters blocked — no OS isolation, not recommended) |
+| `network` | `true` | Allow network access inside the sandbox (only effective when `enabled: true`) |
 | `timeoutMs` | `30000` | Maximum sandbox execution time (ms) |
 | `outputLimitBytes` | `131072` | Maximum sandbox output size (bytes) |
 

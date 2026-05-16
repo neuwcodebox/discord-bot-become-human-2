@@ -197,7 +197,9 @@ export function createToolRegistry(
     addTool(tools, {
       name: "sandbox_exec",
       label: "Sandbox Exec",
-      description: "Execute an argv command in a bwrap sandbox bound to the current guild workspace.",
+      description: config.sandbox.enabled
+        ? "Execute an argv command in a bwrap sandbox bound to the current guild workspace."
+        : "Execute an argv command in the current guild workspace directory (no sandbox isolation).",
       parameters: Type.Object({ argv: Type.Array(Type.String()) }),
       execute: async (_toolCallId, params) => {
         return jsonResult(await sandboxExec(context, config, params));

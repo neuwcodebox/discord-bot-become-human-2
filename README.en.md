@@ -1,8 +1,7 @@
 # discord-bot-become-human-2
 
-An AI agent bot that participates naturally in Discord group chat. Instead of responding only to commands, it watches the conversation and joins in when the moment feels right.
-
-You can configure the bot's name, personality, tone, and role through text files. Each Discord server gets its own independent setup.
+An AI agent bot that reads the full context of Discord group chat like a person would, then naturally joins in when the moment calls for it.
+Each server gets an isolated workspace that keeps the bot's identity, long-term memory, and skills in text files, while OpenAI Codex or OpenAI-compatible LLMs and sandboxed tool execution extend its conversations and actions.
 
 ---
 

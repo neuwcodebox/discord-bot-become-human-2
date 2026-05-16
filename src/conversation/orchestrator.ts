@@ -147,7 +147,10 @@ export class ConversationOrchestrator {
         },
         "conversation engaged",
       );
-      await delay(randomDebounceMs(this.config.conversation.notEngaged.engageDebounceMs));
+      const debounceRange = relatedToBot
+        ? this.config.conversation.notEngaged.directTriggerDebounceMs
+        : this.config.conversation.notEngaged.ambientDebounceMs;
+      await delay(randomDebounceMs(debounceRange));
       await this.reply(decision, events, workspace, discordMessage);
       return;
     }
@@ -746,7 +749,11 @@ export class ConversationOrchestrator {
       ...this.config,
       memory: {
         ...this.config.memory,
-        compaction: { ...this.config.memory.compaction, maxEventsBeforeCompaction: 1, minEventsPerSummary: 1 },
+        compaction: {
+          ...this.config.memory.compaction,
+          maxEventsBeforeCompaction: 1,
+          minEventsPerSummary: 1,
+        },
       },
     };
     const compacted = await new MemoryCompactor(workspace.workspaceRoot, forcedConfig, async (events) => {

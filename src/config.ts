@@ -61,7 +61,8 @@ const configSchema = z.object({
     maxRecentMessages: z.number().int().positive(),
     maxParticipantsForProfileLoad: z.number().int().positive(),
     notEngaged: z.object({
-      engageDebounceMs: tupleMsSchema,
+      directTriggerDebounceMs: tupleMsSchema,
+      ambientDebounceMs: tupleMsSchema,
       directTriggerConfidence: z.number().min(0).max(1),
       ambientEngagementEnabled: z.boolean(),
       ambientMinSilenceMs: z.number().int().nonnegative(),
@@ -196,7 +197,8 @@ export const defaultConfig: AppConfig = {
     maxRecentMessages: 100,
     maxParticipantsForProfileLoad: 16,
     notEngaged: {
-      engageDebounceMs: [3000, 9000],
+      directTriggerDebounceMs: [0, 1000],
+      ambientDebounceMs: [3000, 9000],
       directTriggerConfidence: 1,
       ambientEngagementEnabled: true,
       ambientMinSilenceMs: 300000,

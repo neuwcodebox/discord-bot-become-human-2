@@ -5,7 +5,10 @@ FROM node:24-bookworm AS builder
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# npm install instead of npm ci: the lock file is generated on x86 and does not
+# include arm64 optional packages (@emnapi/core, @emnapi/runtime) required by
+# rolldown on arm64.  npm install resolves them at build time.
+RUN npm install
 COPY . .
 RUN npm run build
 
@@ -51,4 +54,4 @@ ENV NODE_ENV=production
 # Pass secrets via environment or mount a .env file to /app/.env
 # Required at minimum: DISCORD_BOT_TOKEN (or whichever tokenEnv names)
 
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/index.mjs"]

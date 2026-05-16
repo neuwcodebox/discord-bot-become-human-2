@@ -5,6 +5,7 @@ import { EventLog } from "../memory/event-log.js";
 import { getGuildWorkspace } from "../paths/runtime-paths.js";
 import { ensureGuildWorkspace, ensureUserProfile } from "../paths/workspace-init.js";
 import type { AppConfig, RuntimePaths } from "../types.js";
+import { handleAdminCommand, isAdminCommand } from "./admin-commands.js";
 import {
   normalizeMessageCreate,
   normalizeMessageDelete,
@@ -42,6 +43,10 @@ export function wireDiscordEvents(input: {
         "discord event ignored by allowlist",
       );
       return;
+    }
+    if (!message.author.bot && isAdminCommand(message.content ?? "")) {
+      const handled = await handleAdminCommand({ message, config, paths, orchestrator });
+      if (handled) return;
     }
     const workspace = getGuildWorkspace(paths, message.guildId);
     await ensureGuildWorkspace(paths, workspace);

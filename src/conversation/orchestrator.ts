@@ -6,6 +6,7 @@ import { sendDiscordMessage } from "../discord/sender.js";
 import { DiscordStreamingWriter } from "../discord/streaming-writer.js";
 import { childLogger } from "../logger.js";
 import { buildCompactionSummaryContext, MemoryCompactor } from "../memory/compactor.js";
+import { DreamRunner } from "../memory/dream-runner.js";
 import { DreamScheduler } from "../memory/dream-scheduler.js";
 import { EventLog } from "../memory/event-log.js";
 import { createDiscordActionRuntimeFromMessage } from "../tools/discord-actions.js";
@@ -16,6 +17,7 @@ import type {
   AgentRunResult,
   AppConfig,
   GuildWorkspace,
+  HistoryEntry,
   NormalizedDiscordEvent,
   NormalizedDiscordMessage,
   RuntimeAgentTool,
@@ -737,6 +739,37 @@ export class ConversationOrchestrator {
     if (message.replyTo && this.botIdentity.userId && message.replyTo.authorId === this.botIdentity.userId)
       return true;
     return /^\/[a-z0-9_-]+/i.test(message.cleanContent.trim());
+  }
+
+  async adminForceCompact(workspace: GuildWorkspace): Promise<HistoryEntry | undefined> {
+    const forcedConfig: AppConfig = {
+      ...this.config,
+      memory: {
+        ...this.config.memory,
+        compaction: { ...this.config.memory.compaction, maxEventsBeforeCompaction: 1, minEventsPerSummary: 1 },
+      },
+    };
+    const compacted = await new MemoryCompactor(workspace.workspaceRoot, forcedConfig, async (events) => {
+      const result = await this.runner.run({
+        sessionId: `compact:${workspace.guildId}`,
+        messages: buildCompactionSummaryContext(events, this.config.runtime.timezone),
+        allowEmptyText: false,
+        traceLabel: "compaction",
+      });
+      return result.text;
+    }).compactIfNeeded();
+    return compacted;
+  }
+
+  async adminForceDream(workspace: GuildWorkspace): Promise<boolean> {
+    const result = await new DreamRunner(
+      workspace.workspaceRoot,
+      this.agentsPath,
+      workspace.guildId,
+      this.config,
+      this.runner,
+    ).run("admin");
+    return result !== undefined;
   }
 }
 

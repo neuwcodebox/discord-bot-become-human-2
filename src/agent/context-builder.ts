@@ -362,10 +362,11 @@ function formatHistoryEntries(history: HistoryEntry[]): string {
 
 function buildUserDocsBlock(userFiles: Map<string, string>, maxCharsPerFile: number): string | undefined {
   if (userFiles.size === 0) return undefined;
-  const parts = [...userFiles.entries()].map(
-    ([path, content]) => `### ${path}\n${truncateText(content, maxCharsPerFile).text.trim()}`,
-  );
-  return block("user_docs", parts.join("\n\n"));
+  const parts = [...userFiles.entries()].map(([filePath, content]) => {
+    const trimmed = truncateText(content, maxCharsPerFile).text.trim();
+    return `<user_doc path="${filePath}">\n${trimmed}\n</user_doc>`;
+  });
+  return `<user_docs>\n${parts.join("\n")}\n</user_docs>`;
 }
 
 function block(tag: string, content: string): string | undefined {

@@ -1,4 +1,7 @@
 import "./bootstrap-env.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Events } from "discord.js";
 import { Langfuse } from "langfuse";
 import { OpenAICompatibleAgentRunner, PiCodexAgentRunner } from "./agent/runner.js";
@@ -14,7 +17,7 @@ const log = childLogger("main");
 export async function main(): Promise<void> {
   const projectRoot = projectRootFromImportMeta(import.meta.url);
   const bootstrapConfig = await loadOrCreateConfig(
-    `${process.env.HOME}/.discord-bot-become-human-2/config.json`,
+    join(homedir(), ".discord-bot-become-human-2", "config.json"),
   );
   const paths = createRuntimePaths(projectRoot, bootstrapConfig);
   const config = await loadOrCreateConfig(paths.configPath);
@@ -85,7 +88,7 @@ export async function main(): Promise<void> {
   await loginDiscord(client, config);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     log.error({ err: error }, "fatal startup error");
     process.exitCode = 1;

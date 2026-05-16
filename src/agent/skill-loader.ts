@@ -85,10 +85,11 @@ export class SkillLoader {
 function parseSkillMarkdown(raw: string): {
   metadata: { name?: string; description?: string; always?: boolean };
 } {
-  if (!raw.startsWith("---\n")) return { metadata: {} };
-  const end = raw.indexOf("\n---", 4);
+  const normalized = raw.replace(/\r\n/g, "\n");
+  if (!normalized.startsWith("---\n")) return { metadata: {} };
+  const end = normalized.indexOf("\n---", 4);
   if (end === -1) return { metadata: {} };
-  const yaml = raw.slice(4, end);
+  const yaml = normalized.slice(4, end);
   const parsed = parseDocument(yaml).toJSON() as {
     name?: unknown;
     description?: unknown;
@@ -102,9 +103,10 @@ function parseSkillMarkdown(raw: string): {
 }
 
 function stripFrontmatter(raw: string): string {
-  if (!raw.startsWith("---\n")) return raw;
-  const end = raw.indexOf("\n---", 4);
+  const normalized = raw.replace(/\r\n/g, "\n");
+  if (!normalized.startsWith("---\n")) return raw;
+  const end = normalized.indexOf("\n---", 4);
   if (end === -1) return raw;
-  const after = raw.slice(end + 4);
+  const after = normalized.slice(end + 4);
   return (after.startsWith("\n") ? after.slice(1) : after).trimStart();
 }

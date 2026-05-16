@@ -127,7 +127,7 @@ export async function buildResponseContext(input: {
     {
       role: "system",
       content: sections(
-        "Generate the actual Discord reply using ReAct-style tools when useful. Return only the message text that should be sent to Discord.",
+        `Generate the actual Discord reply using ReAct-style tools when useful. Default language: ${input.config.runtime.defaultLocale} (SOUL.md speaking style takes priority). Return only the message text that should be sent to Discord.`,
         block("instructions", agents),
         block("soul", docs.soul),
         block("group", docs.group),

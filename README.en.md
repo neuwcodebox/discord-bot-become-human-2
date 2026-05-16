@@ -195,17 +195,193 @@ Built-in skills: `memory`, `skill-creator`, `weather`, `workspace-files`, `disco
 
 ---
 
-## Restricting to Specific Servers or Channels
+## config.json Reference
 
-By default the bot works in all servers and channels it has access to. To restrict it, edit `config.json`:
+On first run the bot creates `~/.discord-bot-become-human-2/config.json` with defaults.
+
+### discord
+
+| Key | Default | Description |
+|---|---|---|
+| `tokenEnv` | `"DISCORD_BOT_TOKEN"` | Environment variable name holding the bot token |
+| `allowedGuildIds` | `[]` | Allowed server IDs. Empty means all servers |
+| `allowedChannelIds` | `[]` | Allowed channel IDs. Empty means all channels |
+| `adminUserIds` | `[]` | User IDs allowed to use admin commands (`/compact`, `/dream`) |
+| `enableMentions` | `true` | React to bot mentions |
+| `enableReplies` | `true` | React when someone replies to the bot's message |
+| `enableReactions` | `true` | Allow emoji reaction responses |
+| `enableMessageEditStreaming` | `true` | Stream responses by progressively editing a message |
+
+### llm
+
+Choose one of two providers.
+
+**OpenAI Codex:**
 
 ```json
 {
-  "discord": {
-    "allowedGuildIds": ["server_id_1", "server_id_2"],
-    "allowedChannelIds": ["channel_id_1"]
+  "llm": {
+    "provider": "openai-codex",
+    "model": "gpt-5.5",
+    "reasoning": "medium",
+    "codex": {
+      "authPath": "~/.discord-bot-become-human-2/codex-auth.json",
+      "transport": "auto"
+    }
   }
 }
+```
+
+- `reasoning`: `"low"` / `"medium"` / `"high"` / `"xhigh"`
+- `transport`: `"auto"` / `"responses"` / `"websocket"`
+
+**OpenAI-compatible endpoint:**
+
+```json
+{
+  "llm": {
+    "provider": "openai-compatible",
+    "model": "gpt-5.5",
+    "baseURL": "https://api.openai.com/v1",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "contextWindow": 128000,
+    "reasoning": "medium"
+  }
+}
+```
+
+- `apiKeyEnv`: environment variable name holding the API key
+- `contextWindow`: model context window size in tokens
+
+### runtime
+
+| Key | Default | Description |
+|---|---|---|
+| `rootDir` | `"~/.discord-bot-become-human-2"` | Root directory for all runtime data |
+| `defaultLocale` | `"ko-KR"` | Default locale for bot output |
+| `timezone` | `"Asia/Seoul"` | Timezone used in time expressions |
+
+### conversation
+
+**Top-level**
+
+| Key | Default | Description |
+|---|---|---|
+| `maxRecentMessages` | `100` | Number of recent events included in context |
+| `maxParticipantsForProfileLoad` | `16` | Maximum user profiles loaded at once |
+| `cooldownMs` | `[10000, 30000]` | Cooldown range after each reply (ms), picked randomly |
+
+**`notEngaged` — conditions for entering a conversation**
+
+| Key | Default | Description |
+|---|---|---|
+| `directTriggerDebounceMs` | `[0, 1000]` | Delay before replying to a direct trigger (mention, name, reply, slash command) (ms) |
+| `ambientDebounceMs` | `[3000, 9000]` | Delay before replying after ambient engagement (ms) |
+| `ambientEngagementEnabled` | `true` | Whether the bot can join conversations without a direct trigger |
+| `ambientMinSilenceMs` | `300000` | Minimum silence since last human message before ambient engagement is tried (ms, default 5 min) |
+| `ambientConfidenceThreshold` | `0.78` | Minimum LLM confidence required for ambient engagement |
+| `ambientMaxPerHour` | `2` | Maximum ambient engagements per hour |
+
+**`engaged` — response conditions while engaged**
+
+| Key | Default | Description |
+|---|---|---|
+| `minSecondsBetweenBotReplies` | `20` | Minimum seconds between consecutive bot replies |
+| `minSecondsBetweenUnpromptedReplies` | `90` | Minimum seconds between unprompted bot replies |
+| `maxConsecutiveBotReplies` | `1` | Max bot replies without an intervening human message |
+| `replyConfidenceThreshold` | `0.7` | Minimum LLM confidence required to send a reply |
+| `silentStayConfidenceThreshold` | `0.55` | Minimum LLM confidence required to send an emoji reaction |
+| `disengageAfterUnrelatedHumanMessages` | `8` | Disengage after this many human messages unrelated to the bot |
+| `disengageAfterIdleMs` | `900000` | Disengage after this much silence since the last human message (ms, default 15 min) |
+
+**`engaged.followUpBatch` — message batching while engaged**
+
+| Key | Default | Description |
+|---|---|---|
+| `directTriggerDebounceMs` | `[1000, 2000]` | Wait range before flushing when a direct trigger is present (ms) |
+| `quietDebounceMs` | `[3000, 5000]` | Wait range before flushing for ordinary messages (ms) |
+| `maxWaitMs` | `15000` | Maximum wait before a forced flush (ms) |
+| `maxMessages` | `4` | Flush immediately when this many messages are pending |
+
+### memory
+
+**compaction — event log archiving**
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Enable event log compaction |
+| `maxEventsBeforeCompaction` | `120` | Compact when the event count exceeds this |
+| `minEventsPerSummary` | `20` | Minimum events included in each compaction pass |
+
+**dream — long-term memory updates**
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Enable Dream runs |
+| `intervalMinutes` | `120` | Minimum interval between Dream runs (minutes) |
+| `runOnConversationEnd` | `true` | Run Dream when a conversation ends |
+| `runOnCompaction` | `true` | Run Dream after compaction |
+| `allowEditSoul` | `true` | Whether Dream can edit SOUL.md |
+| `allowEditGroup` | `true` | Whether Dream can edit GROUP.md |
+| `allowEditUserProfiles` | `true` | Whether Dream can edit user profiles |
+
+### tools
+
+Toggles for each tool available to the bot. All default to `true`.
+
+| Key | Description |
+|---|---|
+| `workspaceFiles` | Read and write workspace files |
+| `memory` | Read and write memory |
+| `discordActions` | Send, edit, delete messages and add reactions |
+| `fetchUrl` | Fetch URL content |
+| `readAttachment` | Read message attachments |
+| `sandboxExec` | Execute code in a sandbox |
+| `searchInternet` | Search the web (also requires `search` config) |
+
+### sandbox
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Enable bwrap sandbox isolation |
+| `network` | `true` | Allow network access inside the sandbox |
+| `timeoutMs` | `30000` | Maximum sandbox execution time (ms) |
+| `outputLimitBytes` | `131072` | Maximum sandbox output size (bytes) |
+
+### search (optional)
+
+Required for `tools.searchInternet` to work.
+
+```json
+{
+  "search": {
+    "provider": "tavily",
+    "apiKey": "tvly-..."
+  }
+}
+```
+
+### observability (optional)
+
+Trace LLM calls with [Langfuse](https://langfuse.com).
+
+```json
+{
+  "observability": {
+    "langfuse": {
+      "publicKeyEnv": "LANGFUSE_PUBLIC_KEY",
+      "secretKeyEnv": "LANGFUSE_SECRET_KEY",
+      "host": "https://cloud.langfuse.com"
+    }
+  }
+}
+```
+
+Add the keys to `.env`:
+
+```env
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
 ---

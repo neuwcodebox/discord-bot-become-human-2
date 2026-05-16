@@ -197,17 +197,193 @@ description: 언제 이 스킬을 써야 하는지 — 예: "Use this skill when
 
 ---
 
-## 특정 서버/채널로 제한
+## config.json 설정 항목
 
-기본적으로 봇이 들어간 모든 서버와 채널에서 동작합니다. 특정 서버나 채널만 허용하려면 `config.json`을 수정합니다:
+봇을 처음 실행하면 `~/.discord-bot-become-human-2/config.json`이 기본값으로 생성됩니다.
+
+### discord
+
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| `tokenEnv` | `"DISCORD_BOT_TOKEN"` | 봇 토큰을 읽어올 환경 변수 이름 |
+| `allowedGuildIds` | `[]` | 허용할 서버 ID 목록. 비워두면 모든 서버에서 동작 |
+| `allowedChannelIds` | `[]` | 허용할 채널 ID 목록. 비워두면 모든 채널에서 동작 |
+| `adminUserIds` | `[]` | `/compact`, `/dream` 등 관리자 명령어를 사용할 수 있는 사용자 ID 목록 |
+| `enableMentions` | `true` | 봇 멘션 반응 활성화 |
+| `enableReplies` | `true` | 봇 메시지 답장 반응 활성화 |
+| `enableReactions` | `true` | 이모지 반응 기능 활성화 |
+| `enableMessageEditStreaming` | `true` | 스트리밍 답변 활성화 (메시지를 점진적으로 편집하며 출력) |
+
+### llm
+
+두 가지 provider 중 하나를 선택합니다.
+
+**OpenAI Codex:**
 
 ```json
 {
-  "discord": {
-    "allowedGuildIds": ["서버ID1", "서버ID2"],
-    "allowedChannelIds": ["채널ID1"]
+  "llm": {
+    "provider": "openai-codex",
+    "model": "gpt-5.5",
+    "reasoning": "medium",
+    "codex": {
+      "authPath": "~/.discord-bot-become-human-2/codex-auth.json",
+      "transport": "auto"
+    }
   }
 }
+```
+
+- `reasoning`: `"low"` / `"medium"` / `"high"` / `"xhigh"`
+- `transport`: `"auto"` / `"responses"` / `"websocket"`
+
+**OpenAI 호환 엔드포인트:**
+
+```json
+{
+  "llm": {
+    "provider": "openai-compatible",
+    "model": "gpt-5.5",
+    "baseURL": "https://api.openai.com/v1",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "contextWindow": 128000,
+    "reasoning": "medium"
+  }
+}
+```
+
+- `apiKeyEnv`: API 키를 읽어올 환경 변수 이름
+- `contextWindow`: 모델의 컨텍스트 윈도우 크기 (토큰 수)
+
+### runtime
+
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| `rootDir` | `"~/.discord-bot-become-human-2"` | 런타임 데이터 저장 루트 경로 |
+| `defaultLocale` | `"ko-KR"` | 봇이 사용할 기본 언어 |
+| `timezone` | `"Asia/Seoul"` | 봇이 시간 표현에 사용할 타임존 |
+
+### conversation
+
+**기본값**
+
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| `maxRecentMessages` | `100` | 컨텍스트에 포함할 최근 이벤트 수 |
+| `maxParticipantsForProfileLoad` | `16` | 한 번에 로드할 최대 사용자 프로필 수 |
+| `cooldownMs` | `[10000, 30000]` | 답변 후 쿨다운 시간 범위 (ms). 범위 안에서 무작위 선택 |
+
+**`notEngaged` — 비참여 상태에서 참여 진입 조건**
+
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| `directTriggerDebounceMs` | `[0, 1000]` | 멘션·이름·답글·슬래시 등 직접 트리거 후 응답까지 지연 범위 (ms) |
+| `ambientDebounceMs` | `[3000, 9000]` | 앰비언트 참여 후 응답까지 지연 범위 (ms) |
+| `ambientEngagementEnabled` | `true` | 직접 트리거 없이 자발적으로 대화에 참여할지 여부 |
+| `ambientMinSilenceMs` | `300000` | 앰비언트 참여를 시도하기 위한 최소 침묵 시간 (ms, 기본 5분) |
+| `ambientConfidenceThreshold` | `0.78` | 앰비언트 참여를 결정하는 LLM 신뢰도 최솟값 |
+| `ambientMaxPerHour` | `2` | 시간당 최대 앰비언트 참여 횟수 |
+
+**`engaged` — 참여 중 상태에서 응답 조건**
+
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| `minSecondsBetweenBotReplies` | `20` | 연속 응답 사이 최소 간격 (초) |
+| `minSecondsBetweenUnpromptedReplies` | `90` | 자발적 응답 사이 최소 간격 (초) |
+| `maxConsecutiveBotReplies` | `1` | 사람 메시지 없이 연속으로 보낼 수 있는 최대 답변 수 |
+| `replyConfidenceThreshold` | `0.7` | 응답하기 위한 LLM 신뢰도 최솟값 |
+| `silentStayConfidenceThreshold` | `0.55` | 이모지 반응하기 위한 LLM 신뢰도 최솟값 |
+| `disengageAfterUnrelatedHumanMessages` | `8` | 봇과 무관한 사람 메시지가 이 수에 도달하면 참여 종료 |
+| `disengageAfterIdleMs` | `900000` | 마지막 사람 메시지로부터 이 시간이 지나면 참여 종료 (ms, 기본 15분) |
+
+**`engaged.followUpBatch` — 참여 중 메시지 묶음 처리**
+
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| `directTriggerDebounceMs` | `[1000, 2000]` | 직접 트리거 메시지가 있을 때 flush 전 대기 범위 (ms) |
+| `quietDebounceMs` | `[3000, 5000]` | 일반 메시지일 때 flush 전 대기 범위 (ms) |
+| `maxWaitMs` | `15000` | 최대 대기 시간. 이 시간이 지나면 강제로 flush (ms) |
+| `maxMessages` | `4` | 이 수를 초과하면 즉시 flush |
+
+### memory
+
+**compaction — 이벤트 로그 압축**
+
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| `enabled` | `true` | 이벤트 로그 압축 활성화 |
+| `maxEventsBeforeCompaction` | `120` | 이 이벤트 수를 초과하면 오래된 것을 압축 |
+| `minEventsPerSummary` | `20` | 한 번 압축할 때 최소 포함 이벤트 수 |
+
+**dream — 장기 기억 업데이트**
+
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| `enabled` | `true` | Dream 실행 활성화 |
+| `intervalMinutes` | `120` | Dream 실행 최소 간격 (분) |
+| `runOnConversationEnd` | `true` | 대화 종료 후 Dream 실행 여부 |
+| `runOnCompaction` | `true` | 압축 후 Dream 실행 여부 |
+| `allowEditSoul` | `true` | Dream이 SOUL.md를 편집할 수 있는지 여부 |
+| `allowEditGroup` | `true` | Dream이 GROUP.md를 편집할 수 있는지 여부 |
+| `allowEditUserProfiles` | `true` | Dream이 사용자 프로필을 편집할 수 있는지 여부 |
+
+### tools
+
+봇이 사용할 수 있는 도구를 켜고 끕니다. 모두 기본값 `true`.
+
+| 항목 | 설명 |
+|---|---|
+| `workspaceFiles` | workspace 파일 읽기·쓰기 |
+| `memory` | 기억 읽기·쓰기 |
+| `discordActions` | Discord 메시지 전송·수정·삭제·반응 |
+| `fetchUrl` | URL 내용 가져오기 |
+| `readAttachment` | 메시지 첨부 파일 읽기 |
+| `sandboxExec` | 샌드박스 코드 실행 |
+| `searchInternet` | 인터넷 검색 (`search` 설정도 필요) |
+
+### sandbox
+
+| 항목 | 기본값 | 설명 |
+|---|---|---|
+| `enabled` | `true` | bwrap 샌드박스 격리 활성화 |
+| `network` | `true` | 샌드박스 내 네트워크 허용 |
+| `timeoutMs` | `30000` | 샌드박스 실행 최대 시간 (ms) |
+| `outputLimitBytes` | `131072` | 샌드박스 출력 최대 크기 (bytes) |
+
+### search (선택)
+
+인터넷 검색 기능에 사용할 검색 API를 설정합니다. `tools.searchInternet`이 `true`여야 동작합니다.
+
+```json
+{
+  "search": {
+    "provider": "tavily",
+    "apiKey": "tvly-..."
+  }
+}
+```
+
+### observability (선택)
+
+LLM 호출을 [Langfuse](https://langfuse.com)로 추적합니다.
+
+```json
+{
+  "observability": {
+    "langfuse": {
+      "publicKeyEnv": "LANGFUSE_PUBLIC_KEY",
+      "secretKeyEnv": "LANGFUSE_SECRET_KEY",
+      "host": "https://cloud.langfuse.com"
+    }
+  }
+}
+```
+
+환경 변수에 키를 넣습니다:
+
+```env
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
 ---

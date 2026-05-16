@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+references
+.env
+auth.json
+auth.json.lock
+codex-auth.json
+.vscode
+.claude
+.agents
+.codex

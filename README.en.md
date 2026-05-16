@@ -386,6 +386,66 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 
 ---
 
+## Docker Deployment
+
+### Run
+
+```bash
+docker run -d \
+  --name bot \
+  --restart unless-stopped \
+  --env-file .env \
+  -v bot-data:/root/.discord-bot-become-human-2 \
+  neurowhai/discord-bot-become-human-2:latest
+```
+
+To build the image yourself:
+
+```bash
+docker build -t discord-bot-become-human-2 .
+```
+
+Bot data (config.json, codex-auth.json, guild workspaces) is persisted in the `bot-data` named volume.
+
+### Initial Setup
+
+On first run, `config.json` is created with defaults. To edit it:
+
+```bash
+docker exec -it bot sh -c 'cat /root/.discord-bot-become-human-2/config.json'
+# edit the file on the host via the volume, then restart:
+docker restart bot
+```
+
+Config is read once at startup — restart the container after any change.
+
+### Codex Login (if using openai-codex)
+
+```bash
+docker run --rm -it \
+  -v bot-data:/root/.discord-bot-become-human-2 \
+  neurowhai/discord-bot-become-human-2:latest \
+  node dist/scripts/login-openai-codex.mjs
+```
+
+### Logs
+
+```bash
+docker logs -f bot
+```
+
+For structured JSON logs add to your env file:
+
+```env
+LOG_FORMAT=json
+```
+
+### bwrap Sandbox
+
+`bwrap` is installed setuid in the image so the sandbox works without `--privileged`. If user namespaces are restricted on your host, add `--security-opt seccomp=unconfined`.
+
+---
+
 ## Development Commands
 
 ```bash

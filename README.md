@@ -388,6 +388,68 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 
 ---
 
+## Docker로 배포
+
+Docker가 설치된 Linux 서버에서 바로 실행할 수 있습니다.
+
+### 실행
+
+```bash
+docker run -d \
+  --name bot \
+  --restart unless-stopped \
+  --env-file .env \
+  -v bot-data:/root/.discord-bot-become-human-2 \
+  neurowhai/discord-bot-become-human-2:latest
+```
+
+직접 빌드하려면:
+
+```bash
+docker build -t discord-bot-become-human-2 .
+```
+
+봇 데이터(config.json, codex-auth.json, guild workspace)는 `bot-data` named volume에 영속화됩니다.
+
+### 초기 설정
+
+컨테이너를 처음 실행하면 `config.json`이 기본값으로 생성됩니다. 설정을 변경하려면:
+
+```bash
+docker exec -it bot sh -c 'cat /root/.discord-bot-become-human-2/config.json'
+# 호스트에서 볼륨 경로의 파일을 편집한 뒤 재시작:
+docker restart bot
+```
+
+`config.json`은 시작 시 한 번만 읽힙니다. 변경 후에는 반드시 재시작해야 반영됩니다.
+
+### Codex 로그인 (openai-codex 사용 시)
+
+```bash
+docker run --rm -it \
+  -v bot-data:/root/.discord-bot-become-human-2 \
+  neurowhai/discord-bot-become-human-2:latest \
+  node dist/scripts/login-openai-codex.mjs
+```
+
+### 로그 확인
+
+```bash
+docker logs -f bot
+```
+
+JSON 형식으로 구조화된 로그가 필요하면 `--env-file` 파일에 추가합니다:
+
+```env
+LOG_FORMAT=json
+```
+
+### bwrap 샌드박스
+
+이미지 안에 `bwrap`이 setuid로 설치되어 있어 `--privileged` 없이도 샌드박스가 동작합니다. 일부 커널 설정에서 user namespace가 제한된 경우 `--security-opt seccomp=unconfined`를 추가합니다.
+
+---
+
 ## 개발 명령어
 
 ```bash

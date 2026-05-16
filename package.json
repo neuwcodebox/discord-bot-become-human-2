@@ -8,7 +8,7 @@
     "discord-bot-become-human-2": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsdown src/index.ts --format esm --dts --clean --sourcemap",
+    "build": "tsdown src/index.ts src/scripts/login-openai-codex.ts --format esm --dts --clean --sourcemap",
     "check": "tsc --noEmit",
     "dev": "tsx src/index.ts",
     "format": "biome format --write .",

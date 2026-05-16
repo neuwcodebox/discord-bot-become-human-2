@@ -177,9 +177,17 @@ export function createToolRegistry(
       label: "Send Message",
       description:
         "Send an additional message to the current channel. Your main text reply is always sent separately — use this only when content should appear as an independent message at a specific point in the conversation.",
-      parameters: Type.Object({ content: Type.String() }),
+      parameters: Type.Object({
+        content: Type.Optional(Type.String()),
+        files: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              "Workspace-relative paths of files to attach. Each file must already exist in the workspace.",
+          }),
+        ),
+      }),
       execute: async (_toolCallId, params) => {
-        return jsonResult(await discordActions.sendMessage(params.content));
+        return jsonResult(await discordActions.sendMessage(params.content, params.files));
       },
     });
   }

@@ -1,7 +1,10 @@
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import type { GuildMember, Message, TextBasedChannel } from "discord.js";
+import { AttachmentBuilder } from "discord.js";
 import { splitText } from "../discord/chunker.js";
 import { sendDiscordMessage } from "../discord/sender.js";
+import { assertInsideWorkspace } from "../paths/workspace-guard.js";
 import { readJsonl } from "../storage/jsonl.js";
 import type { HistoryEntry, NormalizedDiscordEvent, ToolContext } from "../types.js";
 
@@ -13,7 +16,7 @@ export type DiscordActionRuntime = {
   getMember(userId: string): Promise<Record<string, unknown>>;
   getChannel(): Promise<Record<string, unknown>>;
   searchHistory(query: string, maxResults?: number): Promise<Array<Record<string, unknown>>>;
-  sendMessage(content: string): Promise<{ messageId: string }>;
+  sendMessage(content: string | undefined, files?: string[]): Promise<{ messageId: string }>;
 };
 
 export function createDiscordActionRuntimeFromMessage(
@@ -55,14 +58,33 @@ export function createDiscordActionRuntimeFromMessage(
     async getChannel() {
       return serializeChannel(message.channel);
     },
-    async sendMessage(content) {
+    async sendMessage(content, files) {
+      if (!content && (!files || files.length === 0)) {
+        throw new Error("discord_send_message requires at least one of content or files.");
+      }
       await onBeforeSend?.();
-      const chunks = splitText(content, limits.softLimitChars, limits.hardLimitChars);
+      const attachments =
+        files && files.length > 0
+          ? await Promise.all(
+              files.map(async (filePath) => {
+                const resolved = await assertInsideWorkspace(context.workspaceRoot, filePath);
+                const buffer = await readFile(resolved);
+                return new AttachmentBuilder(buffer, { name: basename(resolved) });
+              }),
+            )
+          : [];
+      const chunks = splitText(content ?? "", limits.softLimitChars, limits.hardLimitChars);
+      const effectiveChunks = chunks.length > 0 ? chunks : attachments.length > 0 ? [""] : [];
       let lastMessageId = "";
-      for (const chunk of chunks) {
+      for (let i = 0; i < effectiveChunks.length; i++) {
+        const chunk = effectiveChunks[i] ?? "";
         const replyTo = sendState.firstReplySent ? undefined : message;
         sendState.firstReplySent = true;
-        const sent = await sendDiscordMessage(message.channel, chunk, replyTo ? { replyTo } : {});
+        const isLast = i === effectiveChunks.length - 1;
+        const sent = await sendDiscordMessage(message.channel, chunk, {
+          ...(replyTo ? { replyTo } : {}),
+          ...(isLast && attachments.length > 0 ? { files: attachments } : {}),
+        });
         lastMessageId = sent.id;
       }
       return { messageId: lastMessageId };

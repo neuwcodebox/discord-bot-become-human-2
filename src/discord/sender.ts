@@ -1,4 +1,4 @@
-import type { Message, MessageMentionOptions, TextBasedChannel } from "discord.js";
+import type { AttachmentBuilder, Message, MessageMentionOptions, TextBasedChannel } from "discord.js";
 
 const replyNewerMessageThreshold = 2;
 
@@ -7,26 +7,33 @@ export const safeAllowedMentions: MessageMentionOptions = {
   repliedUser: false,
 };
 
+type SendPayload = {
+  content: string;
+  allowedMentions: MessageMentionOptions;
+  files?: AttachmentBuilder[];
+};
+
+type SendableChannel = TextBasedChannel & {
+  send: (options: SendPayload) => Promise<Message<boolean>>;
+};
+
 export async function sendDiscordMessage(
   channel: TextBasedChannel,
   content: string,
-  options: { replyTo?: Message<boolean> } = {},
+  options: { replyTo?: Message<boolean>; files?: AttachmentBuilder[] } = {},
 ): Promise<Message<boolean>> {
-  if (options.replyTo && (await shouldReplyToMessage(options.replyTo))) {
-    return options.replyTo.reply({
+  const { replyTo, files } = options;
+  const fileOptions = files && files.length > 0 ? { files } : {};
+  if (replyTo && (await shouldReplyToMessage(replyTo))) {
+    return replyTo.reply({
       content,
+      ...fileOptions,
       allowedMentions: safeAllowedMentions,
     });
   }
-  return (
-    channel as TextBasedChannel & {
-      send: (options: {
-        content: string;
-        allowedMentions: MessageMentionOptions;
-      }) => Promise<Message<boolean>>;
-    }
-  ).send({
+  return (channel as SendableChannel).send({
     content,
+    ...fileOptions,
     allowedMentions: safeAllowedMentions,
   });
 }

@@ -283,6 +283,7 @@ description: 언제 이 스킬을 써야 하는지 — 예: "Use this skill when
 | `ambientDebounceMs` | `[3000, 9000]` | 앰비언트 참여 후 응답까지 지연 범위 (ms) |
 | `ambientEngagementEnabled` | `true` | 직접 트리거 없이 자발적으로 대화에 참여할지 여부 |
 | `ambientMinSilenceMs` | `300000` | 앰비언트 참여를 시도하기 위한 최소 침묵 시간 (ms, 기본 5분) |
+| `ambientDecisionCooldownMs` | `900000` | 앰비언트 참여 판단 LLM 호출 사이 최소 간격 (ms, 기본 15분) |
 | `ambientConfidenceThreshold` | `0.78` | 앰비언트 참여를 결정하는 LLM 신뢰도 최솟값 |
 | `ambientMaxPerHour` | `2` | 시간당 최대 앰비언트 참여 횟수 |
 

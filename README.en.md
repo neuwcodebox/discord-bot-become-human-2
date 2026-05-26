@@ -281,6 +281,7 @@ Choose one of two providers.
 | `ambientDebounceMs` | `[3000, 9000]` | Delay before replying after ambient engagement (ms) |
 | `ambientEngagementEnabled` | `true` | Whether the bot can join conversations without a direct trigger |
 | `ambientMinSilenceMs` | `300000` | Minimum silence since last human message before ambient engagement is tried (ms, default 5 min) |
+| `ambientDecisionCooldownMs` | `900000` | Minimum interval between ambient engagement decision LLM calls (ms, default 15 min) |
 | `ambientConfidenceThreshold` | `0.78` | Minimum LLM confidence required for ambient engagement |
 | `ambientMaxPerHour` | `2` | Maximum ambient engagements per hour |
 

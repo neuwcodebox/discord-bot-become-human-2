@@ -21,6 +21,7 @@ describe("context builder", () => {
       engagement: "engaged",
       lastBotMessageAt: "2026-05-11T12:00:00.000Z",
       lastHumanMessageAt: "2026-05-11T12:00:03.000Z",
+      lastAmbientDecisionAt: "2026-05-11T12:00:02.000Z",
       recentBotMessageIds: ["b1"],
       consecutiveBotReplies: 1,
       humanMessagesSinceLastBot: 1,
@@ -61,6 +62,7 @@ describe("context builder", () => {
     expect(systemMessage).toContain("one Discord emoji reaction only");
     expect(systemMessage).toContain("Do not use wait because of cooldown");
     expect(systemMessage).not.toContain("cooldownUntil");
+    expect(systemMessage).not.toContain("lastAmbientDecisionAt");
     expect(systemMessage).not.toContain("pendingFollowUp");
     expect(systemMessage).not.toContain("waitCount");
   });

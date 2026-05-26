@@ -380,9 +380,13 @@ function sections(...blocks: Array<string | undefined>): string {
 
 function stripRuntimeOnlyState(
   state: ConversationRuntimeState,
-): Omit<ConversationRuntimeState, "cooldownUntil" | "pendingFollowUp" | "pendingTimer"> {
+): Omit<
+  ConversationRuntimeState,
+  "cooldownUntil" | "pendingFollowUp" | "pendingTimer" | "lastAmbientDecisionAt"
+> {
   const {
     cooldownUntil: _cooldownUntil,
+    lastAmbientDecisionAt: _lastAmbientDecisionAt,
     pendingFollowUp: _pendingFollowUp,
     pendingTimer: _pendingTimer,
     ...rest

@@ -146,6 +146,7 @@ export type ConversationRuntimeState = {
   lastBotMessageAt?: string;
   lastHumanMessageAt?: string;
   lastEngagementChangedAt?: string;
+  lastAmbientDecisionAt?: string;
   engagedSince?: string;
   recentBotMessageIds: string[];
   consecutiveBotReplies: number;

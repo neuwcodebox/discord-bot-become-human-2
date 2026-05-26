@@ -439,6 +439,14 @@ export class ConversationOrchestrator {
       log.debug({ messageId: message.id }, "ambient engagement skipped by silence window");
       return undefined;
     }
+    const lastAmbientDecisionAt = state.lastAmbientDecisionAt ? Date.parse(state.lastAmbientDecisionAt) : 0;
+    if (
+      lastAmbientDecisionAt &&
+      now - lastAmbientDecisionAt < this.config.conversation.notEngaged.ambientDecisionCooldownMs
+    ) {
+      log.debug({ messageId: message.id }, "ambient engagement skipped by decision cooldown");
+      return undefined;
+    }
     state.ambientReplyTimes = state.ambientReplyTimes.filter(
       (time) => now - Date.parse(time) < 60 * 60 * 1000,
     );
@@ -446,6 +454,7 @@ export class ConversationOrchestrator {
       log.debug({ messageId: message.id }, "ambient engagement skipped by hourly limit");
       return undefined;
     }
+    state.lastAmbientDecisionAt = new Date(now).toISOString();
     const decision = await decideEngagement({
       runner: this.runner,
       agentsPath: this.agentsPath,

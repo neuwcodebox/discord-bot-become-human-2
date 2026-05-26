@@ -25,6 +25,16 @@ describe("config parsing", () => {
     expect(parsed.context.maxFileReadBytes).toBe(131_072);
   });
 
+  it("fills ambient decision cooldown for existing config files", () => {
+    const input = structuredClone(defaultConfig);
+    delete (input.conversation.notEngaged as Partial<AppConfig["conversation"]["notEngaged"]>)
+      .ambientDecisionCooldownMs;
+
+    const parsed = parseConfig(input);
+
+    expect(parsed.conversation.notEngaged.ambientDecisionCooldownMs).toBe(900000);
+  });
+
   it("defaults adminUserIds to empty array when absent", () => {
     const input = structuredClone(defaultConfig);
     delete (input.discord as Partial<AppConfig["discord"]>).adminUserIds;

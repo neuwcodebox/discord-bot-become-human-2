@@ -248,10 +248,12 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
     "maxRecentMessages": 100,
     "maxParticipantsForProfileLoad": 16,
     "notEngaged": {
-      "engageDebounceMs": [3000, 9000],
+      "directTriggerDebounceMs": [0, 1000],
+      "ambientDebounceMs": [3000, 9000],
       "directTriggerConfidence": 1.0,
       "ambientEngagementEnabled": true,
       "ambientMinSilenceMs": 300000,
+      "ambientDecisionCooldownMs": 900000,
       "ambientConfidenceThreshold": 0.78,
       "ambientMaxPerHour": 2
     },
@@ -1137,6 +1139,7 @@ type ConversationRuntimeState = {
   lastBotMessageAt?: string;
   lastHumanMessageAt?: string;
   lastEngagementChangedAt?: string;
+  lastAmbientDecisionAt?: string;
   engagedSince?: string;
 
   recentBotMessageIds: string[];
@@ -1167,6 +1170,7 @@ type ConversationRuntimeState = {
 - minSecondsBetweenBotReplies (not_engaged/direct reply에는 hard gate, engaged follow-up에는 batch 처리)
 - minSecondsBetweenUnpromptedReplies
 - maxConsecutiveBotReplies
+- ambientDecisionCooldownMs
 - ambientMaxPerHour
 - allowedGuildIds
 - allowedChannelIds
@@ -1187,6 +1191,8 @@ Hard gate에 의해 응답이 불가능한 경우에는 response generation agen
 ```
 
 강한 trigger가 아니고 ambient engagement 조건을 만족하면 engagement decision call을 실행할 수 있다.
+Ambient engagement 조건에는 최소 침묵 시간과 decision call 쿨다운이 모두 포함된다. 쿨다운은
+engage 성공 여부와 무관하게 마지막 ambient decision call 시각을 기준으로 적용한다.
 
 판단 결과:
 

@@ -250,7 +250,6 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
     "notEngaged": {
       "directTriggerDebounceMs": [0, 1000],
       "ambientDebounceMs": [3000, 9000],
-      "directTriggerConfidence": 1.0,
       "ambientEngagementEnabled": true,
       "ambientMinSilenceMs": 300000,
       "ambientDecisionCooldownMs": 900000,

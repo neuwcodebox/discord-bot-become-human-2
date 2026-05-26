@@ -35,6 +35,24 @@ describe("config parsing", () => {
     expect(parsed.conversation.notEngaged.ambientDecisionCooldownMs).toBe(900000);
   });
 
+  it("ignores obsolete direct trigger confidence config", () => {
+    const input = {
+      ...structuredClone(defaultConfig),
+      conversation: {
+        ...structuredClone(defaultConfig.conversation),
+        notEngaged: {
+          ...structuredClone(defaultConfig.conversation.notEngaged),
+          directTriggerConfidence: 0.5,
+        },
+      },
+    };
+
+    const parsed = parseConfig(input);
+    const notEngaged: object = parsed.conversation.notEngaged;
+
+    expect("directTriggerConfidence" in notEngaged).toBe(false);
+  });
+
   it("defaults adminUserIds to empty array when absent", () => {
     const input = structuredClone(defaultConfig);
     delete (input.discord as Partial<AppConfig["discord"]>).adminUserIds;

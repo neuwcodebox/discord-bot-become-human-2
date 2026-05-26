@@ -63,7 +63,6 @@ const configSchema = z.object({
     notEngaged: z.object({
       directTriggerDebounceMs: tupleMsSchema,
       ambientDebounceMs: tupleMsSchema,
-      directTriggerConfidence: z.number().min(0).max(1),
       ambientEngagementEnabled: z.boolean(),
       ambientMinSilenceMs: z.number().int().nonnegative(),
       ambientDecisionCooldownMs: z.number().int().nonnegative().default(900000),
@@ -200,7 +199,6 @@ export const defaultConfig: AppConfig = {
     notEngaged: {
       directTriggerDebounceMs: [0, 1000],
       ambientDebounceMs: [3000, 9000],
-      directTriggerConfidence: 1,
       ambientEngagementEnabled: true,
       ambientMinSilenceMs: 300000,
       ambientDecisionCooldownMs: 900000,

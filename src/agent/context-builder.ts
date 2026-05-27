@@ -4,6 +4,7 @@ import { buildTranscript, materializeMessages } from "../conversation/transcript
 import type {
   AgentContextMessage,
   AppConfig,
+  BotIdentity,
   ConversationRuntimeState,
   EngagementDecision,
   HistoryEntry,
@@ -23,6 +24,7 @@ export async function buildEngagementDecisionContext(input: {
   events: NormalizedDiscordEvent[];
   currentMessage: NormalizedDiscordMessage;
   timezone?: string;
+  botIdentity: BotIdentity;
 }): Promise<AgentContextMessage[]> {
   const [agents, docs] = await Promise.all([
     readFile(input.agentsPath, "utf8"),
@@ -33,6 +35,7 @@ export async function buildEngagementDecisionContext(input: {
     channelId: input.currentMessage.channelId,
     targetMessageIds: [input.currentMessage.id],
     timezone: input.timezone ?? "UTC",
+    botUserId: input.botIdentity.userId,
   });
   return [
     {
@@ -40,6 +43,7 @@ export async function buildEngagementDecisionContext(input: {
       content: sections(
         `Decide whether the bot should join this Discord conversation. Output JSON only matching this TypeScript shape:\n${engagementShape}`,
         block("instructions", agents),
+        block("bot_identity", formatBotIdentity(input.botIdentity)),
         block("soul", docs.soul),
         block("group", docs.group),
         block("conversation_state", JSON.stringify(stripRuntimeOnlyState(input.state), null, 2)),
@@ -59,6 +63,7 @@ export async function buildStayDecisionContext(input: {
   events: NormalizedDiscordEvent[];
   currentMessage: NormalizedDiscordMessage;
   timezone?: string;
+  botIdentity: BotIdentity;
 }): Promise<AgentContextMessage[]> {
   const [agents, docs] = await Promise.all([
     readFile(input.agentsPath, "utf8"),
@@ -69,6 +74,7 @@ export async function buildStayDecisionContext(input: {
     channelId: input.currentMessage.channelId,
     targetMessageIds: [input.currentMessage.id],
     timezone: input.timezone ?? "UTC",
+    botUserId: input.botIdentity.userId,
   });
   return [
     {
@@ -76,6 +82,7 @@ export async function buildStayDecisionContext(input: {
       content: sections(
         `Decide whether to stay engaged and what action to take. Output JSON only matching this TypeScript shape:\n${stayShape}`,
         block("instructions", agents),
+        block("bot_identity", formatBotIdentity(input.botIdentity)),
         block("soul", docs.soul),
         block("group", docs.group),
         block("action_semantics", stayActionSemantics),
@@ -96,6 +103,7 @@ export async function buildResponseContext(input: {
   events: NormalizedDiscordEvent[];
   targetMessageIds: string[];
   task: EngagementDecision | StayDecision;
+  botIdentity: BotIdentity;
 }): Promise<AgentContextMessage[]> {
   const messages = materializeMessages(input.events);
   const latest = messages.at(-1);
@@ -121,6 +129,7 @@ export async function buildResponseContext(input: {
     channelId: latest?.channelId ?? "unknown",
     targetMessageIds: input.targetMessageIds,
     timezone: input.config.runtime.timezone,
+    botUserId: input.botIdentity.userId,
   });
   const cappedTranscript = truncateText(transcript, input.config.context.maxTranscriptChars).text;
   return [
@@ -129,6 +138,7 @@ export async function buildResponseContext(input: {
       content: sections(
         `Generate the actual Discord reply using ReAct-style tools when useful. Default language: ${input.config.runtime.defaultLocale} (SOUL.md speaking style takes priority). Return only the message text that should be sent to Discord.`,
         block("instructions", agents),
+        block("bot_identity", formatBotIdentity(input.botIdentity)),
         block("soul", docs.soul),
         block("group", docs.group),
         block("tools", docs.tools),
@@ -173,6 +183,7 @@ export async function buildReactionContext(input: {
   targetMessageIds: string[];
   task: StayDecision;
   timezone?: string;
+  botIdentity: BotIdentity;
 }): Promise<AgentContextMessage[]> {
   const messages = materializeMessages(input.events);
   const latest = messages.at(-1);
@@ -185,6 +196,7 @@ export async function buildReactionContext(input: {
     channelId: latest?.channelId ?? "unknown",
     targetMessageIds: input.targetMessageIds,
     timezone: input.timezone ?? "UTC",
+    botUserId: input.botIdentity.userId,
   });
   return [
     {
@@ -192,6 +204,7 @@ export async function buildReactionContext(input: {
       content: sections(
         "Add one natural Discord emoji reaction using the discord_react tool. Do not write a Discord message. Use exactly one tool call and then stop.",
         block("instructions", agents),
+        block("bot_identity", formatBotIdentity(input.botIdentity)),
         block("soul", docs.soul),
         block("group", docs.group),
         block("task", JSON.stringify(input.task, null, 2)),
@@ -367,6 +380,16 @@ function buildUserDocsBlock(userFiles: Map<string, string>, maxCharsPerFile: num
     return `<user_doc path="${filePath}">\n${trimmed}\n</user_doc>`;
   });
   return `<user_docs>\n${parts.join("\n")}\n</user_docs>`;
+}
+
+function formatBotIdentity(identity: BotIdentity): string {
+  return [
+    `discord_user_id: ${identity.userId}`,
+    `mention: ${identity.mention}`,
+    `username: ${identity.username}`,
+    `global_name: ${identity.globalName ?? ""}`,
+    `tag: ${identity.tag}`,
+  ].join("\n");
 }
 
 function block(tag: string, content: string): string | undefined {

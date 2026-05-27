@@ -63,6 +63,24 @@ describe("transcript builder", () => {
         messageId: "m2",
         payload: { deletedAt: "2026-05-10T12:03:00.000Z" },
       },
+      {
+        type: "message_create",
+        time: "2026-05-10T12:04:00.000Z",
+        guildId: "g",
+        channelId: "c",
+        messageId: "m3",
+        authorId: "bot-self",
+        payload: message("m3", "bot-self", "Self Bot", "my reply", true),
+      },
+      {
+        type: "message_create",
+        time: "2026-05-10T12:05:00.000Z",
+        guildId: "g",
+        channelId: "c",
+        messageId: "m4",
+        authorId: "bot-other",
+        payload: message("m4", "bot-other", "Other Bot", "other reply", true),
+      },
     ];
 
     const transcript = buildTranscript(events, {
@@ -70,6 +88,7 @@ describe("transcript builder", () => {
       channelId: "c",
       targetMessageIds: ["m2"],
       timezone: "UTC",
+      botUserId: "bot-self",
     });
 
     expect(transcript).toContain('<msg id="m2" author="min"');
@@ -78,21 +97,25 @@ describe("transcript builder", () => {
     expect(transcript).toContain("<reply");
     // reply itself has attachments and embeds
     const replyBlock = transcript.slice(transcript.indexOf("<reply"), transcript.indexOf("</reply>") + 8);
+    expect(replyBlock).not.toContain("uid=");
     expect(replyBlock).toContain("ra1");
     expect(replyBlock).toContain("reply-embed");
     expect(transcript).toContain("<atts>");
     expect(transcript).toContain("<embeds>");
     expect(transcript).toContain("<rxs>");
     expect(transcript).toContain("<deleted");
+    expect(transcript).toContain('<msg id="m3" author="Self Bot" t="2026-05-10T12:00:00.000+00:00" me>');
+    expect(transcript).toContain('<msg id="m4" author="Other Bot" t="2026-05-10T12:00:00.000+00:00" bot>');
+    expect(transcript).not.toContain(" other");
   });
 });
 
-function message(id: string, userId: string, name: string, content: string) {
+function message(id: string, userId: string, name: string, content: string, isBot = false) {
   return {
     id,
     guildId: "g",
     channelId: "c",
-    author: { id: userId, username: name, displayName: name, isBot: false },
+    author: { id: userId, username: name, displayName: name, isBot },
     content,
     cleanContent: content,
     createdAt: "2026-05-10T12:00:00.000Z",

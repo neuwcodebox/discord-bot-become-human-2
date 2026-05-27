@@ -6,6 +6,15 @@ export type { AppConfig } from "./config.js";
 export type RuntimeAgentTool = AgentTool<TSchema, unknown>;
 export type RuntimeModel = Model<Api>;
 
+export type BotIdentity = {
+  userId: string;
+  username: string;
+  globalName: string | null;
+  tag: string;
+  mention: string;
+  names: string[];
+};
+
 export type MaybePromise<T> = T | Promise<T>;
 
 export type TupleRangeMs = readonly [number, number];

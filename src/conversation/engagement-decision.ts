@@ -2,6 +2,7 @@ import { z } from "zod";
 import { buildEngagementDecisionContext } from "../agent/context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
 import type {
+  BotIdentity,
   ConversationRuntimeState,
   EngagementDecision,
   NormalizedDiscordEvent,
@@ -31,6 +32,7 @@ export async function decideEngagement(input: {
   events: NormalizedDiscordEvent[];
   currentMessage: NormalizedDiscordMessage;
   timezone?: string;
+  botIdentity: BotIdentity;
 }): Promise<EngagementDecision> {
   const messages = await buildEngagementDecisionContext(input);
   const result = await input.runner.run({

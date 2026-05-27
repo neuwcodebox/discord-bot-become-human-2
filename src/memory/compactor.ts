@@ -69,14 +69,16 @@ export class MemoryCompactor {
 
 export function buildCompactionSummaryContext(
   events: NormalizedDiscordEvent[],
-  timezone?: string,
+  timezone: string,
+  botUserId: string,
 ): AgentContextMessage[] {
   const first = events[0];
   const transcript = first
     ? buildTranscript(events, {
         guildId: first.guildId,
         channelId: first.channelId,
-        timezone: timezone ?? "UTC",
+        timezone,
+        botUserId,
       })
     : "";
   return [

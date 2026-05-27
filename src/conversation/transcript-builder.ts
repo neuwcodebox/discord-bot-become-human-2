@@ -2,16 +2,22 @@ import type { NormalizedDiscordEvent, NormalizedDiscordMessage } from "../types.
 
 export function buildTranscript(
   events: NormalizedDiscordEvent[],
-  options: { guildId: string; channelId: string; targetMessageIds?: string[]; timezone: string },
+  options: {
+    guildId: string;
+    channelId: string;
+    targetMessageIds?: string[];
+    timezone: string;
+    botUserId: string;
+  },
 ): string {
-  const { timezone } = options;
+  const { botUserId, timezone } = options;
   const targetIds = new Set(options.targetMessageIds ?? []);
   const messages = materializeMessages(events);
   const lines = [
     `<transcript guild="${attr(options.guildId)}" channel="${attr(options.channelId)}" order="oldest_to_newest">`,
   ];
   for (const message of messages) {
-    lines.push(renderMessage(message, targetIds.has(message.id), timezone));
+    lines.push(renderMessage(message, targetIds.has(message.id), timezone, botUserId));
   }
   lines.push("</transcript>");
   return lines.join("\n");
@@ -43,12 +49,17 @@ export function materializeMessages(events: NormalizedDiscordEvent[]): Normalize
   return [...byId.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
-function renderMessage(message: NormalizedDiscordMessage, target: boolean, timezone: string): string {
+function renderMessage(
+  message: NormalizedDiscordMessage,
+  target: boolean,
+  timezone: string,
+  botUserId: string,
+): string {
   const flags = [
     `id="${attr(message.id)}"`,
     `author="${attr(message.author.displayName)}"`,
     `t="${attr(formatTimestamp(message.createdAt, timezone))}"`,
-    message.author.isBot ? "bot" : undefined,
+    authorPerspective(message, botUserId),
     message.editedAt ? `edited="${attr(formatTimestamp(message.editedAt, timezone))}"` : undefined,
     message.deletedAt ? "deleted" : undefined,
     target ? "target" : undefined,
@@ -57,7 +68,6 @@ function renderMessage(message: NormalizedDiscordMessage, target: boolean, timez
   if (message.replyTo) {
     const replyFlags = [
       `id="${attr(message.replyTo.messageId)}"`,
-      message.replyTo.authorId ? `uid="${attr(message.replyTo.authorId)}"` : undefined,
       message.replyTo.authorDisplayName ? `author="${attr(message.replyTo.authorDisplayName)}"` : undefined,
     ].filter(Boolean);
     lines.push(`    <reply ${replyFlags.join(" ")}>`);
@@ -139,6 +149,11 @@ function renderMessage(message: NormalizedDiscordMessage, target: boolean, timez
     lines.push(`    <deleted t="${attr(formatTimestamp(message.deletedAt, timezone))}" />`);
   lines.push("  </msg>");
   return lines.join("\n");
+}
+
+function authorPerspective(message: NormalizedDiscordMessage, botUserId: string): "me" | "bot" | undefined {
+  if (!message.author.isBot) return undefined;
+  return message.author.id === botUserId ? "me" : "bot";
 }
 
 function formatTimestamp(isoString: string, timezone: string): string {

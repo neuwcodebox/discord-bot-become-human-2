@@ -38,7 +38,14 @@ describe("conversation orchestrator", () => {
       },
     };
     const runner = new CountingRunner();
-    const orchestrator = new ConversationOrchestrator(config, agentsPath, runner);
+    const orchestrator = new ConversationOrchestrator(config, agentsPath, runner, {
+      userId: "bot-1",
+      username: "test-bot",
+      globalName: "Test Bot",
+      tag: "test-bot#0001",
+      mention: "<@bot-1>",
+      names: ["Test Bot", "test-bot", "test-bot#0001"],
+    });
     const workspace: GuildWorkspace = { guildId: "g1", guildRoot: root, workspaceRoot: root };
     const log = new EventLog(root);
     const first = messageEvent("m1");

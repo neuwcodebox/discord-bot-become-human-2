@@ -11,6 +11,7 @@ import { createDiscordClient, loginDiscord, wireDiscordEvents } from "./discord/
 import { childLogger } from "./logger.js";
 import { createRuntimePaths, projectRootFromImportMeta } from "./paths/runtime-paths.js";
 import { ensureRuntimeRoot } from "./paths/workspace-init.js";
+import type { BotIdentity } from "./types.js";
 
 const log = childLogger("main");
 
@@ -60,10 +61,6 @@ export async function main(): Promise<void> {
     llm.provider === "openai-codex"
       ? new PiCodexAgentRunner({ ...config, llm }, langfuse)
       : new OpenAICompatibleAgentRunner({ ...config, llm }, langfuse);
-  const botIdentity: { userId?: string; names: string[] } = { names: ["bot"] };
-  const orchestrator = new ConversationOrchestrator(config, paths.resourcesAgentsPath, runner, botIdentity);
-  wireDiscordEvents({ client, config, paths, orchestrator });
-
   const shutdown = async () => {
     await langfuse?.shutdownAsync();
     process.exit(0);
@@ -72,20 +69,41 @@ export async function main(): Promise<void> {
   process.once("SIGTERM", () => void shutdown());
 
   client.once(Events.ClientReady, (readyClient) => {
-    botIdentity.userId = readyClient.user.id;
-    botIdentity.names = [
-      ...new Set(
-        [
-          readyClient.user.username,
-          readyClient.user.globalName,
-          readyClient.user.tag,
-          ...botIdentity.names,
-        ].filter((name): name is string => Boolean(name)),
-      ),
-    ];
-    log.info({ userId: readyClient.user.id, tag: readyClient.user.tag }, "discord client ready");
+    const botIdentity = createBotIdentity(readyClient.user);
+    const orchestrator = new ConversationOrchestrator(config, paths.resourcesAgentsPath, runner, botIdentity);
+    wireDiscordEvents({ client: readyClient, config, paths, orchestrator });
+    log.info(
+      {
+        userId: readyClient.user.id,
+        tag: readyClient.user.tag,
+        names: botIdentity.names,
+      },
+      "discord client ready",
+    );
   });
   await loginDiscord(client, config);
+}
+
+function createBotIdentity(user: {
+  id: string;
+  username: string;
+  globalName: string | null;
+  tag: string;
+}): BotIdentity {
+  return {
+    userId: user.id,
+    username: user.username,
+    globalName: user.globalName,
+    tag: user.tag,
+    mention: `<@${user.id}>`,
+    names: uniqueNames([user.username, user.globalName, user.tag, "bot"]),
+  };
+}
+
+function uniqueNames(values: Array<string | null>): string[] {
+  return [
+    ...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))),
+  ];
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {

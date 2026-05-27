@@ -9,7 +9,16 @@ import {
   buildStayDecisionContext,
 } from "../src/agent/context-builder.js";
 import { defaultConfig } from "../src/config.js";
-import type { ConversationRuntimeState, NormalizedDiscordMessage } from "../src/types.js";
+import type { BotIdentity, ConversationRuntimeState, NormalizedDiscordMessage } from "../src/types.js";
+
+const botIdentity: BotIdentity = {
+  userId: "bot-self",
+  username: "self-bot",
+  globalName: "Self Bot",
+  tag: "self-bot#0001",
+  mention: "<@bot-self>",
+  names: ["Self Bot", "self-bot", "self-bot#0001"],
+};
 
 describe("context builder", () => {
   it("does not expose runtime scheduling fields to stay decision context", async () => {
@@ -53,6 +62,7 @@ describe("context builder", () => {
         },
       ],
       currentMessage: message,
+      botIdentity,
     });
     const systemMessage = context.find((entry) => entry.role === "system")?.content ?? "";
 
@@ -88,6 +98,7 @@ describe("context builder", () => {
         },
       ],
       targetMessageIds: ["m1"],
+      botIdentity,
       task: {
         stayEngaged: true,
         action: "react",
@@ -138,6 +149,7 @@ describe("context builder", () => {
         targetMessageIds: ["m1"],
         expectedRole: "answer_question",
       },
+      botIdentity,
     });
     const systemMessage = context.find((entry) => entry.role === "system")?.content ?? "";
 
@@ -145,6 +157,52 @@ describe("context builder", () => {
     expect(systemMessage).toContain("Focus on targetMessageIds");
     expect(systemMessage).toContain("Do not mention internal JSON");
     expect(systemMessage).toContain("Use tools only when they are actually needed");
+  });
+
+  it("marks this bot as me, other bots as bot, and includes bot identity in response context", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dbh2-context-"));
+    const agentsPath = join(root, "AGENTS.md");
+    await writeFile(agentsPath, "runtime instructions", "utf8");
+    const human = normalizedMessage("m1");
+    const selfBot = normalizedMessage("m2", "bot-self", "Self Bot", true);
+    const otherBot = normalizedMessage("m3", "bot-other", "Other Bot", true);
+
+    const context = await buildResponseContext({
+      agentsPath,
+      workspaceRoot: root,
+      config: defaultConfig,
+      events: [human, selfBot, otherBot].map((message) => ({
+        type: "message_create" as const,
+        time: message.createdAt,
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        authorId: message.author.id,
+        payload: message,
+      })),
+      targetMessageIds: ["m1"],
+      task: {
+        engage: true,
+        confidence: 1,
+        reason: "direct",
+        targetMessageIds: ["m1"],
+        expectedRole: "answer_question",
+      },
+      botIdentity,
+    });
+    const systemMessage = context.find((entry) => entry.role === "system")?.content ?? "";
+    const userMessage = context.find((entry) => entry.role === "user")?.content ?? "";
+
+    expect(systemMessage).toContain("<bot_identity>");
+    expect(systemMessage).toContain("discord_user_id: bot-self");
+    expect(systemMessage).toContain("mention: <@bot-self>");
+    expect(systemMessage).toContain("username: self-bot");
+    expect(systemMessage).toContain("global_name: Self Bot");
+    expect(systemMessage).toContain("tag: self-bot#0001");
+    expect(systemMessage).not.toContain("known_names");
+    expect(userMessage).toContain('<msg id="m1" author="User"');
+    expect(userMessage).toContain('<msg id="m2" author="Self Bot" t="2026-05-11T21:00:03.000+09:00" me>');
+    expect(userMessage).toContain('<msg id="m3" author="Other Bot" t="2026-05-11T21:00:03.000+09:00" bot>');
   });
 
   it("adds durable memory guardrails to Dream context", async () => {
@@ -225,6 +283,7 @@ describe("context builder", () => {
         targetMessageIds: ["m8"],
         expectedRole: "answer_question",
       },
+      botIdentity,
     });
     const userMessage = context.find((entry) => entry.role === "user")?.content ?? "";
 
@@ -234,12 +293,17 @@ describe("context builder", () => {
   });
 });
 
-function normalizedMessage(id: string): NormalizedDiscordMessage {
+function normalizedMessage(
+  id: string,
+  userId = "u1",
+  displayName = "User",
+  isBot = false,
+): NormalizedDiscordMessage {
   return {
     id,
     guildId: "g1",
     channelId: "c1",
-    author: { id: "u1", username: "user", displayName: "User", isBot: false },
+    author: { id: userId, username: displayName, displayName, isBot },
     content: "latest message",
     cleanContent: "latest message",
     createdAt: "2026-05-11T12:00:03.000Z",

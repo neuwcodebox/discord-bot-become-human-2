@@ -16,6 +16,7 @@ import type {
   AgentRunRequest,
   AgentRunResult,
   AppConfig,
+  BotIdentity,
   GuildWorkspace,
   HistoryEntry,
   NormalizedDiscordEvent,
@@ -47,7 +48,7 @@ export class ConversationOrchestrator {
     private readonly config: AppConfig,
     private readonly agentsPath: string,
     private readonly runner: AgentRunner,
-    private readonly botIdentity: { userId?: string; names: string[] } = { names: [] },
+    private readonly botIdentity: BotIdentity,
   ) {
     this.dreamScheduler = new DreamScheduler(config, agentsPath, runner);
   }
@@ -109,7 +110,11 @@ export class ConversationOrchestrator {
     const compacted = await new MemoryCompactor(workspace.workspaceRoot, this.config, async (events) => {
       const result = await this.runner.run({
         sessionId: `compact:${workspace.guildId}`,
-        messages: buildCompactionSummaryContext(events, this.config.runtime.timezone),
+        messages: buildCompactionSummaryContext(
+          events,
+          this.config.runtime.timezone,
+          this.botIdentity.userId,
+        ),
         allowEmptyText: false,
         traceLabel: "compaction",
       });
@@ -299,6 +304,7 @@ export class ConversationOrchestrator {
           events,
           currentMessage,
           timezone: this.config.runtime.timezone,
+          botIdentity: this.botIdentity,
         })
       : forcedSilentStay(gate.reason, currentMessage.id);
     log.info(
@@ -463,6 +469,7 @@ export class ConversationOrchestrator {
       events,
       currentMessage: message,
       timezone: this.config.runtime.timezone,
+      botIdentity: this.botIdentity,
     });
     if (decision.confidence < this.config.conversation.notEngaged.ambientConfidenceThreshold) {
       log.debug(
@@ -513,6 +520,7 @@ export class ConversationOrchestrator {
       events,
       targetMessageIds: task.targetMessageIds,
       task,
+      botIdentity: this.botIdentity,
     });
     const toolContext = {
       guildId: workspace.guildId,
@@ -670,6 +678,7 @@ export class ConversationOrchestrator {
           targetMessageIds,
           task: reactionTask,
           timezone: this.config.runtime.timezone,
+          botIdentity: this.botIdentity,
         }),
         tools,
         allowEmptyText: true,
@@ -768,7 +777,11 @@ export class ConversationOrchestrator {
     const compacted = await new MemoryCompactor(workspace.workspaceRoot, forcedConfig, async (events) => {
       const result = await this.runner.run({
         sessionId: `compact:${workspace.guildId}`,
-        messages: buildCompactionSummaryContext(events, this.config.runtime.timezone),
+        messages: buildCompactionSummaryContext(
+          events,
+          this.config.runtime.timezone,
+          this.botIdentity.userId,
+        ),
         allowEmptyText: false,
         traceLabel: "compaction",
       });

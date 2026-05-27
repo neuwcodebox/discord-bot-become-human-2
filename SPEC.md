@@ -1349,6 +1349,7 @@ system:
 
 developer:
   - resources/AGENTS.md 전체
+  - bot_identity (현재 Discord bot user id, mention, username, globalName, tag)
   - SOUL.md 전체
   - GROUP.md 전체
   - 현재 conversation state
@@ -1384,6 +1385,7 @@ system:
 
 developer:
   - resources/AGENTS.md 전체
+  - bot_identity (현재 Discord bot user id, mention, username, globalName, tag)
   - SOUL.md 전체
   - GROUP.md 전체
   - action semantics (`reply`, `react`, `silent_track`, `wait`, `disengage`의 의미)
@@ -1429,6 +1431,7 @@ system:
 
 developer:
   - resources/AGENTS.md 전체
+  - bot_identity (현재 Discord bot user id, mention, username, globalName, tag)
   - SOUL.md 전체
   - GROUP.md 전체
   - TOOLS.md 전체
@@ -1549,12 +1552,12 @@ Provider가 developer role을 지원하지 않는 경우에는 system 또는 use
 
 ```xml
 <transcript guild="1000" channel="2000" order="oldest_to_newest">
-  <msg id="3000" uid="1234" name="neuw" t="2026-05-10T21:03:00+09:00">
+  <msg id="3000" author="neuw" t="2026-05-10T21:03:00+09:00">
     <text>예전 봇 구조 봤는데 이번엔 pi로 가면 될 듯?</text>
   </msg>
 
-  <msg id="3001" uid="5678" name="min" t="2026-05-10T21:04:00+09:00">
-    <reply id="3000" uid="1234" name="neuw">
+  <msg id="3001" author="min" t="2026-05-10T21:04:00+09:00">
+    <reply id="3000" author="neuw">
       <text>예전 봇 구조 봤는데 이번엔 pi로 가면 될 듯?</text>
     </reply>
     <text>첨부파일 처리 쪽이 중요할 것 같은데</text>
@@ -1563,14 +1566,21 @@ Provider가 developer role을 지원하지 않는 경우에는 system 또는 use
     </atts>
   </msg>
 
-  <msg id="3002" uid="bot" name="Bot" t="2026-05-10T21:05:00+09:00" bot me>
+  <msg id="3002" author="Bot" t="2026-05-10T21:05:00+09:00" me>
     <text>응, reply reference랑 attachment metadata는 정규화해서 넣는 게 좋아 보여요.</text>
     <rxs>
       <rx emoji="👍" count="2" />
     </rxs>
   </msg>
+
+  <msg id="3003" author="OtherBot" t="2026-05-10T21:06:00+09:00" bot>
+    <text>다른 봇이 보낸 관찰 메시지</text>
+  </msg>
 </transcript>
 ```
+
+`me`와 `bot`은 봇/자동화 계정 메시지에만 붙인다. human-authored 메시지에는 작성자 관점 flag를 붙이지
+않는다.
 
 메시지 내부 요소:
 
@@ -1588,7 +1598,7 @@ Provider가 developer role을 지원하지 않는 경우에는 system 또는 use
 편집된 메시지 예:
 
 ```xml
-<msg id="3003" uid="1234" name="neuw" t="2026-05-10T21:06:00+09:00" edited>
+<msg id="3003" author="neuw" t="2026-05-10T21:06:00+09:00" edited>
   <text>수정된 메시지 내용</text>
   <edit t="2026-05-10T21:07:00+09:00">오타 수정</edit>
 </msg>
@@ -1597,7 +1607,7 @@ Provider가 developer role을 지원하지 않는 경우에는 system 또는 use
 삭제된 메시지 예:
 
 ```xml
-<msg id="3004" uid="5678" name="min" t="2026-05-10T21:08:00+09:00" deleted>
+<msg id="3004" author="min" t="2026-05-10T21:08:00+09:00" deleted>
   <deleted t="2026-05-10T21:09:00+09:00" />
 </msg>
 ```
@@ -1605,7 +1615,7 @@ Provider가 developer role을 지원하지 않는 경우에는 system 또는 use
 현재 target message는 `target` flag를 붙일 수 있다.
 
 ```xml
-<msg id="3010" uid="1234" name="neuw" t="2026-05-10T21:10:00+09:00" target>
+<msg id="3010" author="neuw" t="2026-05-10T21:10:00+09:00" target>
   <text>이거 봇이 처리해줄 수 있어?</text>
 </msg>
 ```

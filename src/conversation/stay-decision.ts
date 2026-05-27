@@ -2,6 +2,7 @@ import { z } from "zod";
 import { buildStayDecisionContext } from "../agent/context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
 import type {
+  BotIdentity,
   ConversationRuntimeState,
   NormalizedDiscordEvent,
   NormalizedDiscordMessage,
@@ -37,6 +38,7 @@ export async function decideStay(input: {
   events: NormalizedDiscordEvent[];
   currentMessage: NormalizedDiscordMessage;
   timezone?: string;
+  botIdentity: BotIdentity;
 }): Promise<StayDecision> {
   const messages = await buildStayDecisionContext(input);
   const result = await input.runner.run({

@@ -456,6 +456,8 @@ function summarizeAgentMessageInput(message: AgentMessage): Record<string, unkno
         contentLength: summarizedContentLength(content),
       };
     }
+    default:
+      return { role: message.role };
   }
 }
 

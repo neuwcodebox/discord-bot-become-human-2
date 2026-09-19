@@ -22,8 +22,8 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.74.0",
-    "@earendil-works/pi-ai": "^0.74.0",
+    "@earendil-works/pi-agent-core": "^0.85.1",
+    "@earendil-works/pi-ai": "^0.85.1",
     "discord.js": "^14.19.3",
     "dotenv": "^17.4.2",
     "langfuse": "^3.38.20",

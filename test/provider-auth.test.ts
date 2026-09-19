@@ -3,18 +3,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@earendil-works/pi-ai/oauth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@earendil-works/pi-ai/oauth")>();
+vi.mock("@earendil-works/pi-ai/providers/openai-codex", () => {
   return {
-    ...actual,
-    getOAuthApiKey: vi.fn(async () => ({
-      apiKey: "access-token",
-      newCredentials: {
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
+    openaiCodexProvider: () => ({
+      auth: {
+        oauth: {
+          refresh: vi.fn(async () => ({
+            type: "oauth",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          })),
+          toAuth: vi.fn(async (credential: { access: string }) => ({ apiKey: credential.access })),
+        },
       },
-    })),
+    }),
   };
 });
 

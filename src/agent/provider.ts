@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
-import type { OAuthCredentials } from "@earendil-works/pi-ai/oauth";
-import { getOAuthApiKey } from "@earendil-works/pi-ai/oauth";
+import type { OAuthCredential } from "@earendil-works/pi-ai";
+import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { z } from "zod";
 import { expandHome } from "../paths/runtime-paths.js";
 
@@ -26,11 +26,8 @@ const codexAuthFileSchema = z
   .loose();
 
 type CodexAuthFile = z.infer<typeof codexAuthFileSchema>;
-type PiAiOAuthEntry = z.infer<typeof piAiOAuthEntrySchema>;
-
 export type CodexCredentials = {
   apiKey?: string;
-  headers?: Record<string, string>;
 };
 
 export async function loadCodexCredentials(authPath: string): Promise<CodexCredentials> {
@@ -64,16 +61,16 @@ async function loadConfiguredAuthPath(resolvedPath: string): Promise<CodexCreden
 async function loadPiAiOAuthAuth(parsed: CodexAuthFile, authPath: string): Promise<CodexCredentials> {
   const codexAuth = parsed["openai-codex"];
   if (!codexAuth) return {};
-  const result = await getOAuthApiKey("openai-codex", {
-    "openai-codex": stripType(codexAuth),
-  });
-  if (!result) return {};
-  parsed["openai-codex"] = { type: "oauth", ...result.newCredentials };
-  await writeFile(authPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
-  return { apiKey: result.apiKey };
-}
+  const oauth = openaiCodexProvider().auth.oauth;
+  if (!oauth) throw new Error("OpenAI Codex OAuth is not available");
 
-function stripType(value: PiAiOAuthEntry): OAuthCredentials {
-  const { type: _type, ...credentials } = value;
-  return credentials;
+  let credential: OAuthCredential = codexAuth;
+  if (credential.expires <= Date.now() + 5 * 60_000) {
+    credential = await oauth.refresh(credential, new AbortController().signal);
+    parsed["openai-codex"] = credential;
+    await writeFile(authPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  }
+
+  const auth = await oauth.toAuth(credential);
+  return auth.apiKey ? { apiKey: auth.apiKey } : {};
 }

@@ -1,6 +1,14 @@
-import type { AfterToolCallResult, AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type {
+  AfterToolCallResult,
+  AgentMessage,
+  AgentToolResult,
+  StreamFn,
+} from "@earendil-works/pi-agent-core";
 import { Agent } from "@earendil-works/pi-agent-core";
-import { getModels, registerBuiltInApiProviders } from "@earendil-works/pi-ai";
+import { hasApi } from "@earendil-works/pi-ai";
+import { streamSimple as streamOpenAICodex } from "@earendil-works/pi-ai/api/openai-codex-responses";
+import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Langfuse } from "langfuse";
 import type { CodexLlmConfig, OpenAICompatLlmConfig } from "../config.js";
 import { normalizeContextMessages, truncateText } from "../context/limits.js";
@@ -10,6 +18,16 @@ import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from ".
 import { loadCodexCredentials } from "./provider.js";
 
 const log = childLogger("agent-runner");
+
+const codexStream: StreamFn = (model, context, options) => {
+  if (!hasApi(model, "openai-codex-responses")) throw new Error(`Unsupported Codex API: ${model.api}`);
+  return streamOpenAICodex(model, context, options);
+};
+
+const openAICompatibleStream: StreamFn = (model, context, options) => {
+  if (!hasApi(model, "openai-completions")) throw new Error(`Unsupported OpenAI API: ${model.api}`);
+  return streamOpenAICompletions(model, context, options);
+};
 
 type CodexAppConfig = Omit<AppConfig, "llm"> & { llm: CodexLlmConfig };
 type OpenAICompatAppConfig = Omit<AppConfig, "llm"> & { llm: OpenAICompatLlmConfig };
@@ -22,9 +40,7 @@ export class PiCodexAgentRunner implements AgentRunner {
   constructor(
     private readonly config: CodexAppConfig,
     private readonly langfuse?: Langfuse | null,
-  ) {
-    registerBuiltInApiProviders();
-  }
+  ) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     const startedAt = Date.now();
@@ -41,6 +57,7 @@ export class PiCodexAgentRunner implements AgentRunner {
       getApiKey: async () => credentials.apiKey,
       transport: this.config.llm.codex.transport === "websocket" ? "websocket" : "auto",
       thinkingLevel: this.config.llm.reasoning,
+      streamFn: codexStream,
       messages,
       startedAt,
       langfuse: this.langfuse ?? null,
@@ -52,9 +69,7 @@ export class OpenAICompatibleAgentRunner implements AgentRunner {
   constructor(
     private readonly config: OpenAICompatAppConfig,
     private readonly langfuse?: Langfuse | null,
-  ) {
-    registerBuiltInApiProviders();
-  }
+  ) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     const startedAt = Date.now();
@@ -79,6 +94,7 @@ export class OpenAICompatibleAgentRunner implements AgentRunner {
     return runAgent(request, this.config, model, {
       getApiKey: async () => apiKey,
       thinkingLevel: this.config.llm.reasoning,
+      streamFn: openAICompatibleStream,
       messages,
       startedAt,
       langfuse: this.langfuse ?? null,
@@ -90,6 +106,7 @@ type RunAgentOptions = {
   getApiKey: () => Promise<string | undefined>;
   transport?: "auto" | "websocket";
   thinkingLevel: "low" | "medium" | "high" | "xhigh";
+  streamFn: StreamFn;
   messages: ReturnType<typeof normalizeContextMessages>;
   startedAt: number;
   langfuse: Langfuse | null;
@@ -139,6 +156,7 @@ async function runAgent(
       tools: request.tools ?? [],
     },
     getApiKey: opts.getApiKey,
+    streamFn: opts.streamFn,
     ...(opts.transport !== undefined ? { transport: opts.transport } : {}),
     transformContext: async (contextMessages) => {
       latestGenerationMessages = contextMessages.slice();
@@ -258,7 +276,7 @@ export class StaticAgentRunner implements AgentRunner {
 }
 
 function resolveCodexModel(config: CodexAppConfig): RuntimeModel {
-  const model = getModels("openai-codex").find((candidate) => candidate.id === config.llm.model);
+  const model = getBuiltinModels("openai-codex").find((candidate) => candidate.id === config.llm.model);
   if (!model) throw new Error(`Unknown openai-codex model: ${config.llm.model}`);
   return model;
 }

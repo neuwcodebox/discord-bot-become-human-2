@@ -236,6 +236,8 @@ Choose one of two providers.
 
 - `reasoning`: `"low"` / `"medium"` / `"high"` / `"xhigh"`
 - `transport`: `"auto"` / `"responses"` / `"websocket"`
+- To use GPT-6, set `model` to `"gpt-6.1-sol"`, `"gpt-6-sol"`, or `"gpt-6-luna"` and restart the bot. Existing `config.json` model values are not changed automatically.
+- When deploying an update, run `npm ci` and `npm run build` on the server, then restart the bot. The pi model catalog comes from installed dependencies, so replacing only the source or `dist` may leave `Unknown openai-codex model` errors unresolved.
 
 **OpenAI-compatible endpoint:**
 

@@ -1788,6 +1788,10 @@ authPath: ~/.discord-bot-become-human-2/codex-auth.json
 
 Codex auth는 `@earendil-works/pi-ai/providers/openai-codex`의 provider OAuth API를 사용한다. `codex-auth.json`은 agent context, file tool, bwrap sandbox에 노출하지 않는다.
 
+pi-ai와 pi-agent-core는 `^1.0.0`을 사용한다. 설치된 pi 모델 카탈로그에 등록된 `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`는 `llm.model`로 선택할 수 있다. 기존 config의 모델 값과 기본 모델 `gpt-5.5`는 자동 변경하지 않는다.
+
+모델 카탈로그는 설치된 pi 의존성에서 읽는다. 업데이트 배포 시 서버에서 `npm ci`, `npm run build`를 실행한 뒤 봇을 재시작한다. 카탈로그에 없는 모델을 지정하면 API 요청 전에 오류를 내며, 오류에는 설치된 카탈로그의 모델 ID 목록과 의존성 재설치·빌드·재시작 안내를 포함한다.
+
 로그인 커맨드:
 
 ```bash

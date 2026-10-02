@@ -276,8 +276,13 @@ export class StaticAgentRunner implements AgentRunner {
 }
 
 function resolveCodexModel(config: CodexAppConfig): RuntimeModel {
-  const model = getBuiltinModels("openai-codex").find((candidate) => candidate.id === config.llm.model);
-  if (!model) throw new Error(`Unknown openai-codex model: ${config.llm.model}`);
+  const models = getBuiltinModels("openai-codex");
+  const model = models.find((candidate) => candidate.id === config.llm.model);
+  if (!model) {
+    throw new Error(
+      `Unknown openai-codex model: ${config.llm.model}. Installed pi catalog models: ${models.map((candidate) => candidate.id).join(", ")}. If dependencies were updated, run npm ci and npm run build, then restart the bot.`,
+    );
+  }
   return model;
 }
 

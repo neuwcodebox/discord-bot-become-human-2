@@ -32,7 +32,13 @@ function discordActions(): DiscordActionRuntime {
     deleteOwn: vi.fn(async () => {}),
     getMember: vi.fn(async () => ({ id: "member" })),
     getChannel: vi.fn(async () => ({ id: "channel" })),
-    searchHistory: vi.fn(async () => []),
+    searchHistory: vi.fn(async () => ({
+      entries: [],
+      total: 0,
+      snapshotCursor: 0,
+      archiveSnapshotCursor: 0,
+      nextOffset: null,
+    })),
     sendMessage: vi.fn(async () => ({ messageId: "sent" })),
   };
 }

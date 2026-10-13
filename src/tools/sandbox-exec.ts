@@ -1,7 +1,12 @@
 import type { AppConfig, ToolContext } from "../types.js";
 import { runBwrap, runDirect } from "./bwrap.js";
 
-export async function sandboxExec(context: ToolContext, config: AppConfig, input: { argv: string[] }) {
+export async function sandboxExec(
+  context: ToolContext,
+  config: AppConfig,
+  input: { argv: string[] },
+  signal?: AbortSignal,
+) {
   if (config.sandbox.enabled) {
     return runBwrap({
       workspaceRoot: context.workspaceRoot,
@@ -9,6 +14,7 @@ export async function sandboxExec(context: ToolContext, config: AppConfig, input
       timeoutMs: config.sandbox.timeoutMs,
       outputLimitBytes: config.sandbox.outputLimitBytes,
       network: config.sandbox.network,
+      ...(signal ? { signal } : {}),
     });
   }
   return runDirect({
@@ -16,5 +22,6 @@ export async function sandboxExec(context: ToolContext, config: AppConfig, input
     argv: input.argv,
     timeoutMs: config.sandbox.timeoutMs,
     outputLimitBytes: config.sandbox.outputLimitBytes,
+    ...(signal ? { signal } : {}),
   });
 }

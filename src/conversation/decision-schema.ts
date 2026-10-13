@@ -24,6 +24,13 @@ export const stayDecisionSchema = z.object({
   targetMessageIds: z.array(z.string()),
   reactionHint: z.enum(["ack", "thanks", "funny", "agree", "care", "surprised"]).optional(),
   replyPriority: z.enum(["urgent", "normal", "low", "none"]),
+  responseControl: z
+    .object({
+      responseId: z.string(),
+      action: z.enum(["continue", "update", "cancel"]),
+      messageIds: z.array(z.string()),
+    })
+    .optional(),
   disengageReason: z
     .enum([
       "conversation_ended",

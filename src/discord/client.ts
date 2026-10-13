@@ -65,8 +65,8 @@ export function wireDiscordEvents(input: {
       "discord message normalized",
     );
     await ensureUserProfile(workspace.workspaceRoot, event.payload.author);
-    await new EventLog(workspace.workspaceRoot).append(event);
-    await orchestrator.onMessage(event, workspace, message);
+    const captured = await new EventLog(workspace.workspaceRoot).append(event);
+    await orchestrator.onMessage(captured, workspace, message);
   });
 
   client.on("messageUpdate", async (_oldMessage, newMessage) => {

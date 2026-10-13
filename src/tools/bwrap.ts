@@ -57,6 +57,7 @@ export async function runBwrap(input: {
   timeoutMs: number;
   outputLimitBytes: number;
   network: boolean;
+  signal?: AbortSignal;
 }): Promise<SandboxResult> {
   if (!(await hasBwrap())) throw new Error("sandbox_exec is unavailable because bwrap is not installed.");
   if (input.argv.length === 0) throw new Error("argv must not be empty.");
@@ -85,7 +86,7 @@ export async function runBwrap(input: {
     "--",
     ...input.argv,
   ];
-  return runProcess("/usr/bin/bwrap", args, input.timeoutMs, input.outputLimitBytes);
+  return runProcess("/usr/bin/bwrap", args, input.timeoutMs, input.outputLimitBytes, undefined, input.signal);
 }
 
 export async function runDirect(input: {
@@ -93,6 +94,7 @@ export async function runDirect(input: {
   argv: string[];
   timeoutMs: number;
   outputLimitBytes: number;
+  signal?: AbortSignal;
 }): Promise<SandboxResult> {
   const command = input.argv[0];
   if (command === undefined) throw new Error("argv must not be empty.");
@@ -101,10 +103,17 @@ export async function runDirect(input: {
   if (SHELL_DENYLIST.has(cmdName)) {
     throw new Error(`sandbox_exec: shell interpreters are not allowed (${cmdName}).`);
   }
-  return runProcess(command, args, input.timeoutMs, input.outputLimitBytes, {
-    cwd: input.workspaceRoot,
-    env: sanitizeEnv(process.env),
-  });
+  return runProcess(
+    command,
+    args,
+    input.timeoutMs,
+    input.outputLimitBytes,
+    {
+      cwd: input.workspaceRoot,
+      env: sanitizeEnv(process.env),
+    },
+    input.signal,
+  );
 }
 
 function runProcess(
@@ -113,9 +122,15 @@ function runProcess(
   timeoutMs: number,
   outputLimitBytes: number,
   options?: { cwd?: string; env?: NodeJS.ProcessEnv },
+  signal?: AbortSignal,
 ): Promise<SandboxResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], ...options });
+    signal?.throwIfAborted();
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      ...options,
+      ...(signal ? { signal, killSignal: "SIGKILL" } : {}),
+    });
     let stdout = "";
     let stderr = "";
     let stdoutTruncated = false;
@@ -135,7 +150,10 @@ function runProcess(
       stderr = capped.text;
       stderrTruncated ||= capped.truncated;
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.on("close", (exitCode) => {
       clearTimeout(timeout);
       resolve({

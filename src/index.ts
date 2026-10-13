@@ -61,7 +61,10 @@ export async function main(): Promise<void> {
     llm.provider === "openai-codex"
       ? new PiCodexAgentRunner({ ...config, llm }, langfuse)
       : new OpenAICompatibleAgentRunner({ ...config, llm }, langfuse);
+  let orchestrator: ConversationOrchestrator | undefined;
   const shutdown = async () => {
+    orchestrator?.dispose();
+    await client.destroy();
     await langfuse?.shutdown();
     process.exit(0);
   };
@@ -70,7 +73,7 @@ export async function main(): Promise<void> {
 
   client.once(Events.ClientReady, (readyClient) => {
     const botIdentity = createBotIdentity(readyClient.user);
-    const orchestrator = new ConversationOrchestrator(config, paths.resourcesAgentsPath, runner, botIdentity);
+    orchestrator = new ConversationOrchestrator(config, paths.resourcesAgentsPath, runner, botIdentity);
     wireDiscordEvents({ client: readyClient, config, paths, orchestrator });
     log.info(
       {

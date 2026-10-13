@@ -220,9 +220,25 @@ export type AgentRunRequest = {
   messages: AgentContextMessage[];
   tools?: RuntimeAgentTool[];
   signal?: AbortSignal;
+  onControlReady?: (control: AgentRunControl) => void;
+  onAssistantMessageStart?: () => MaybePromise<void>;
   onTextDelta?: (text: string) => MaybePromise<void>;
   allowEmptyText?: boolean;
   traceLabel?: string;
+};
+
+export type AgentRunControl = {
+  steer(contents: string): boolean;
+};
+
+export type ActiveResponseSnapshot = {
+  id: string;
+  startedAt: string;
+  requesterIds: string[];
+  targetMessageIds: string[];
+  updatesUsed: number;
+  requestMessages: Array<{ id: string; authorId: string; text: string }>;
+  textPreview: string;
 };
 
 export type AgentRunResult = {

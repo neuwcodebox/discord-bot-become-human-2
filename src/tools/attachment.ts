@@ -15,13 +15,13 @@ export type AttachmentReadResult = {
 
 export async function readAttachment(
   cache: AttachmentCache,
-  input: { ref: string; maxBytes?: number },
+  input: { ref: string; maxBytes?: number; signal?: AbortSignal },
 ): Promise<AttachmentReadResult> {
   const id = input.ref.replace(/^attachment:\/\//, "");
   const attachment = cache.get(id);
   if (!attachment) throw new Error(`Unknown attachment reference: ${input.ref}`);
   if (attachment.kind === "image" || attachment.kind === "sticker" || attachment.kind === "emoji") {
-    const image = await fetchBinary(attachment.url, input.maxBytes ?? 2_097_152);
+    const image = await fetchBinary(attachment.url, input.maxBytes ?? 2_097_152, input.signal);
     return {
       ref: input.ref,
       kind: attachment.kind,
@@ -37,6 +37,7 @@ export async function readAttachment(
     url: attachment.url,
     maxBytes: input.maxBytes ?? 262_144,
     allowedContentTypes: ["text/", "application/json", "application/xml", "application/yaml"],
+    ...(input.signal ? { signal: input.signal } : {}),
   });
   return {
     ref: input.ref,
@@ -52,7 +53,7 @@ export async function readAttachment(
 
 export async function readAttachmentToolContent(
   cache: AttachmentCache,
-  input: { ref: string; maxBytes?: number },
+  input: { ref: string; maxBytes?: number; signal?: AbortSignal },
 ) {
   const result = await readAttachment(cache, input);
   if (result.data && result.contentType) {
@@ -86,8 +87,12 @@ export async function readAttachmentToolContent(
 async function fetchBinary(
   url: string,
   maxBytes: number,
+  externalSignal?: AbortSignal,
 ): Promise<{ contentType: string; data: string; truncated: boolean; bytesRead: number; limitBytes: number }> {
-  const response = await fetch(url, { redirect: "follow" });
+  externalSignal?.throwIfAborted();
+  const timeout = AbortSignal.timeout(10_000);
+  const signal = externalSignal ? AbortSignal.any([timeout, externalSignal]) : timeout;
+  const response = await fetch(url, { redirect: "follow", signal });
   const contentType = response.headers.get("content-type") ?? "application/octet-stream";
   const reader = response.body?.getReader();
   if (!reader) return { contentType, data: "", truncated: false, bytesRead: 0, limitBytes: maxBytes };

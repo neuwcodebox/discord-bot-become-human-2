@@ -24,6 +24,10 @@ import type {
 
 const log = childLogger("conversation");
 
+export type ResponseOptions = Pick<AgentRunRequest, "signal" | "onControlReady"> & {
+  onProgress?: (text: string) => void;
+};
+
 export class ConversationResponder {
   constructor(
     private readonly config: AppConfig,
@@ -38,6 +42,7 @@ export class ConversationResponder {
     events: NormalizedDiscordEvent[],
     workspace: GuildWorkspace,
     discordMessage?: Message<boolean>,
+    options: ResponseOptions = {},
   ): Promise<string | undefined> {
     if (!discordMessage) {
       log.warn({ guildId: workspace.guildId }, "reply skipped because discord message is unavailable");
@@ -54,7 +59,10 @@ export class ConversationResponder {
       "agent reply started",
     );
     const stopTyping = startTypingKeepAlive(discordMessage.channel);
+    options.signal?.addEventListener("abort", stopTyping, { once: true });
+    let writer: DiscordStreamingWriter | undefined;
     try {
+      options.signal?.throwIfAborted();
       const context = await buildResponseContext({
         agentsPath: this.agentsPath,
         workspaceRoot: workspace.workspaceRoot,
@@ -66,13 +74,15 @@ export class ConversationResponder {
       });
       const streaming = this.config.streaming.enabled && this.config.discord.enableMessageEditStreaming;
       const sendState = { firstReplySent: false };
-      const writer = streaming
+      options.signal?.throwIfAborted();
+      writer = streaming
         ? new DiscordStreamingWriter(
             discordMessage.channel,
             this.config,
             discordMessage,
             sendState,
             stopTyping,
+            options.signal,
           )
         : undefined;
       const toolContext = createToolContext(workspace, discordMessage);
@@ -85,29 +95,63 @@ export class ConversationResponder {
           {
             softLimitChars: this.config.streaming.softLimitChars,
             hardLimitChars: this.config.streaming.hardLimitChars,
+            maxToolResultChars: this.config.context.maxToolResultChars,
           },
           async () => {
+            options.signal?.throwIfAborted();
             await writer?.forceFlush();
           },
+          options.signal,
         ),
       });
-      const streamOptions = writer ? { onTextDelta: (delta: string) => writer.append(delta) } : {};
+      let progress = "";
+      const streamOptions: Pick<AgentRunRequest, "onTextDelta" | "onAssistantMessageStart"> = {
+        onAssistantMessageStart: async () => {
+          options.signal?.throwIfAborted();
+          progress = "";
+          options.onProgress?.(progress);
+          await writer?.startMessage();
+        },
+        onTextDelta: async (delta) => {
+          options.signal?.throwIfAborted();
+          progress += delta;
+          options.onProgress?.(progress);
+          await writer?.append(delta);
+        },
+      };
+      const corrections: AgentContextMessage[] = [];
+      const onControlReady: NonNullable<AgentRunRequest["onControlReady"]> = (control) => {
+        options.onControlReady?.({
+          steer(contents) {
+            if (!control.steer(contents)) return false;
+            corrections.push({ role: "user", content: contents });
+            return true;
+          },
+        });
+      };
+      const runOptions = {
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.onControlReady ? { onControlReady } : {}),
+      };
       const result = await this.runner.run({
         sessionId: `discord:${workspace.guildId}:${discordMessage.channelId}`,
         messages: context,
         tools,
         traceLabel: "response",
+        ...runOptions,
         ...streamOptions,
       });
       const finalResult = await this.retryEmptyReply({
         result,
-        context,
+        context: [...context, ...corrections],
         workspace,
         discordMessage,
         streaming,
+        ...runOptions,
         ...streamOptions,
       });
       const text = replyTextOrFallback(finalResult.text);
+      options.signal?.throwIfAborted();
       const sent = writer
         ? await writer.finish(text)
         : await sendDiscordMessage(
@@ -127,7 +171,12 @@ export class ConversationResponder {
         "agent reply completed",
       );
       return sent?.id;
+    } catch (error) {
+      if (!options.signal?.aborted) throw error;
+      log.info({ guildId: workspace.guildId, channelId: discordMessage.channelId }, "agent reply cancelled");
+      return writer?.lastMessageId;
     } finally {
+      options.signal?.removeEventListener("abort", stopTyping);
       stopTyping();
     }
   }
@@ -232,7 +281,11 @@ export class ConversationResponder {
     discordMessage: Message<boolean>;
     streaming: boolean;
     onTextDelta?: AgentRunRequest["onTextDelta"];
+    onAssistantMessageStart?: AgentRunRequest["onAssistantMessageStart"];
+    signal?: AbortSignal;
+    onControlReady?: AgentRunRequest["onControlReady"];
   }): Promise<AgentRunResult> {
+    input.signal?.throwIfAborted();
     if (input.result.text.trim().length > 0) return input.result;
     log.warn(
       {
@@ -255,6 +308,9 @@ export class ConversationResponder {
         },
       ],
       ...(input.onTextDelta ? { onTextDelta: input.onTextDelta } : {}),
+      ...(input.onAssistantMessageStart ? { onAssistantMessageStart: input.onAssistantMessageStart } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
+      ...(input.onControlReady ? { onControlReady: input.onControlReady } : {}),
     });
   }
 }
@@ -264,6 +320,7 @@ function createToolContext(workspace: GuildWorkspace, message: Message<boolean>)
     guildId: workspace.guildId,
     workspaceRoot: workspace.workspaceRoot,
     channelId: message.channelId,
+    ...(message.channel.isThread() ? { threadId: message.channel.id } : {}),
     actorUserId: message.author.id,
   };
 }

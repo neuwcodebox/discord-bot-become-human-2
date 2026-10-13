@@ -33,10 +33,12 @@ export async function workspaceWrite(
   context: ToolContext,
   path: string,
   contents: string,
+  signal?: AbortSignal,
 ): Promise<{ path: string }> {
   const safePath = await assertWritablePathInsideWorkspace(context.workspaceRoot, path);
   await mkdir(dirname(safePath), { recursive: true });
-  await writeFile(safePath, contents, "utf8");
+  signal?.throwIfAborted();
+  await writeFile(safePath, contents, { encoding: "utf8", ...(signal ? { signal } : {}) });
   return { path: relative(context.workspaceRoot, safePath) };
 }
 

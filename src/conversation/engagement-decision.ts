@@ -12,6 +12,7 @@ export async function decideEngagement(
     sessionId: `decision:${input.currentMessage.guildId}:${input.currentMessage.channelId}`,
     messages,
     traceLabel: "engagement_decision",
+    ...(input.signal ? { signal: input.signal } : {}),
   });
   return engagementDecisionSchema.parse(parseDecisionJson(result.text));
 }

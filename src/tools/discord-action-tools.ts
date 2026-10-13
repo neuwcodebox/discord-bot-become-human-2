@@ -62,10 +62,31 @@ export function createDiscordActionTools(actions: DiscordActionRuntime): Runtime
     defineTool({
       name: "discord_search_history",
       label: "Search Discord History",
-      description: "Search this guild workspace's events.jsonl and history.jsonl.",
-      parameters: Type.Object({ query: Type.String(), maxResults: Type.Optional(Type.Number()) }),
-      execute: async (_toolCallId, params) =>
-        jsonResult(await actions.searchHistory(params.query, params.maxResults)),
+      description:
+        "Recall recorded conversation in the current channel. Search message text or omit query to catch up on a time range. Results contain latest message versions, omit deleted messages, and can be paginated. Use the current model to interpret what matters; source links are for explicit requests only.",
+      parameters: Type.Object({
+        query: Type.Optional(Type.String()),
+        authorId: Type.Optional(Type.String()),
+        after: Type.Optional(
+          Type.String({ description: "Inclusive ISO 8601 timestamp with timezone offset." }),
+        ),
+        before: Type.Optional(
+          Type.String({ description: "Exclusive ISO 8601 timestamp with timezone offset." }),
+        ),
+        order: Type.Optional(Type.Union([Type.Literal("newest"), Type.Literal("oldest")])),
+        maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+        offset: Type.Optional(Type.Integer({ minimum: 0 })),
+        snapshotCursor: Type.Optional(
+          Type.Integer({ minimum: 0, description: "Reuse the returned snapshotCursor on subsequent pages." }),
+        ),
+        archiveSnapshotCursor: Type.Optional(
+          Type.Integer({
+            minimum: 0,
+            description: "Reuse the returned archiveSnapshotCursor on subsequent pages.",
+          }),
+        ),
+      }),
+      execute: async (_toolCallId, params) => jsonResult(await actions.searchHistory(params)),
     }),
     defineTool({
       name: "discord_send_message",

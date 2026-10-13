@@ -4,9 +4,11 @@ import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { isFileNotFoundError, readTextIfExists } from "./files.js";
 
-export async function appendJsonl(path: string, value: unknown): Promise<void> {
+export async function appendJsonl(path: string, value: unknown, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   await mkdir(dirname(path), { recursive: true });
-  await appendFile(path, `${JSON.stringify(value)}\n`, "utf8");
+  signal?.throwIfAborted();
+  await appendFile(path, `${JSON.stringify(value)}\n`, { encoding: "utf8", ...(signal ? { signal } : {}) });
 }
 
 export async function readJsonl<T>(path: string, limit?: number): Promise<T[]> {

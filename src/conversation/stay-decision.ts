@@ -12,6 +12,7 @@ export async function decideStay(
     sessionId: `stay:${input.currentMessage.guildId}:${input.currentMessage.channelId}`,
     messages,
     traceLabel: "stay_decision",
+    ...(input.signal ? { signal: input.signal } : {}),
   });
   return stayDecisionSchema.parse(parseDecisionJson(result.text));
 }

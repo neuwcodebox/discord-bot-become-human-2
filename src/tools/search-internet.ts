@@ -8,17 +8,23 @@ export type SearchResult = {
 export async function searchInternet(
   params: { query: string },
   provider: SearchProvider,
+  signal?: AbortSignal,
 ): Promise<SearchResult> {
   switch (provider.kind) {
     case "tavily":
-      return searchViaTavily(params.query, provider.apiKey);
+      return searchViaTavily(params.query, provider.apiKey, signal);
   }
 }
 
-async function searchViaTavily(query: string, apiKey: string): Promise<SearchResult> {
+async function searchViaTavily(
+  query: string,
+  apiKey: string,
+  externalSignal?: AbortSignal,
+): Promise<SearchResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
+    externalSignal?.throwIfAborted();
     const response = await fetch("https://api.tavily.com/search", {
       method: "POST",
       headers: {
@@ -26,7 +32,7 @@ async function searchViaTavily(query: string, apiKey: string): Promise<SearchRes
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({ query, max_results: 5, search_depth: "basic" }),
-      signal: controller.signal,
+      signal: externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal,
     });
     if (!response.ok) {
       throw new Error(`Tavily API error: ${response.status} ${response.statusText}`);

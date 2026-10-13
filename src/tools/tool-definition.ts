@@ -16,7 +16,9 @@ export function defineTool<TParameters extends TSchema, TDetails>(
         "tool execution started",
       );
       try {
+        signal?.throwIfAborted();
         const result = await tool.execute(toolCallId, params, signal, onUpdate);
+        signal?.throwIfAborted();
         log.debug(
           {
             toolName: tool.name,

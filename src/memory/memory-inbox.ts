@@ -9,7 +9,10 @@ export class MemoryInbox {
     this.inboxPath = join(workspaceRoot, "memory", "inbox.jsonl");
   }
 
-  async propose(entry: Omit<MemoryInboxEntry, "time"> & { time?: string }): Promise<MemoryInboxEntry> {
+  async propose(
+    entry: Omit<MemoryInboxEntry, "time"> & { time?: string },
+    signal?: AbortSignal,
+  ): Promise<MemoryInboxEntry> {
     const next: MemoryInboxEntry = {
       time: entry.time ?? new Date().toISOString(),
       source: entry.source,
@@ -19,7 +22,7 @@ export class MemoryInbox {
       evidenceMessageIds: entry.evidenceMessageIds,
       ...(entry.processedAt === undefined ? {} : { processedAt: entry.processedAt }),
     };
-    await appendJsonl(this.inboxPath, next);
+    await appendJsonl(this.inboxPath, next, signal);
     return next;
   }
 

@@ -79,6 +79,14 @@ describe("direct process execution", () => {
 });
 
 describe("sandbox disabled", () => {
+  it("terminates a running process when the response is cancelled", async () => {
+    const controller = new AbortController();
+    const running = sandboxExec(context, directConfig, { argv: ["sleep", "10"] }, controller.signal);
+    const stopped = expect(running).rejects.toMatchObject({ name: "AbortError" });
+    controller.abort();
+    await stopped;
+  });
+
   it("executes a permitted command directly", async () => {
     const result = await sandboxExec(context, directConfig, { argv: ["echo", "direct"] });
 

@@ -19,6 +19,7 @@ import {
 } from "../observability/langfuse.js";
 import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
 import { loadCodexCredentials } from "./provider.js";
+import { bindAgentRunControl } from "./run-control.js";
 
 const log = childLogger("agent-runner");
 
@@ -46,6 +47,7 @@ export class PiCodexAgentRunner implements AgentRunner {
   ) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    request.signal?.throwIfAborted();
     const startedAt = Date.now();
     const model = resolveCodexModel(this.config);
     const messages = normalizeContextMessages(request.messages, this.config, model.contextWindow);
@@ -75,6 +77,7 @@ export class OpenAICompatibleAgentRunner implements AgentRunner {
   ) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
+    request.signal?.throwIfAborted();
     const startedAt = Date.now();
     const model: RuntimeModel = {
       id: this.config.llm.model,
@@ -187,20 +190,21 @@ async function runAgent(
     await langfuseObserver?.handleEvent(event);
     if (event.type === "message_start" && event.message.role === "assistant") {
       currentAssistantText = "";
+      if (!request.signal?.aborted) await request.onAssistantMessageStart?.();
       return;
     }
     if (event.type === "message_update") {
       if (event.assistantMessageEvent.type === "text_delta") {
         currentAssistantText += event.assistantMessageEvent.delta;
         finalText = currentAssistantText;
-        await request.onTextDelta?.(event.assistantMessageEvent.delta);
+        if (!request.signal?.aborted) await request.onTextDelta?.(event.assistantMessageEvent.delta);
         return;
       }
       const text = extractAssistantText(event.message);
       const delta = text.startsWith(currentAssistantText) ? text.slice(currentAssistantText.length) : text;
       currentAssistantText = text;
       finalText = text;
-      if (delta) await request.onTextDelta?.(delta);
+      if (delta && !request.signal?.aborted) await request.onTextDelta?.(delta);
       return;
     }
     if (event.type !== "message_end" || event.message.role !== "assistant") return;
@@ -209,8 +213,18 @@ async function runAgent(
     finalText = text;
   });
 
-  await agent.prompt(prompts);
-  await agent.waitForIdle();
+  const unbind = bindAgentRunControl(agent, request);
+  try {
+    request.signal?.throwIfAborted();
+    await agent.prompt(prompts);
+    await agent.waitForIdle();
+    request.signal?.throwIfAborted();
+  } catch (error) {
+    langfuseObserver?.finish(finalText, agent.state.messages);
+    throw error;
+  } finally {
+    unbind();
+  }
   if (!request.allowEmptyText && finalText.trim().length === 0) {
     const latestAssistant = findLatestAssistantMessage(agent.state.messages);
     const stateText = latestAssistant ? extractAssistantText(latestAssistant) : "";

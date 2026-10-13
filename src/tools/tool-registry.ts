@@ -33,9 +33,9 @@ export function createToolRegistry(
         label: "Write Workspace File",
         description: "Write a UTF-8 text file inside the current guild workspace.",
         parameters: Type.Object({ path: Type.String(), contents: Type.String() }),
-        execute: async (_toolCallId, params) => {
+        execute: async (_toolCallId, params, signal) => {
           integrations.writePolicy?.(params.path);
-          return jsonResult(await workspaceWrite(context, params.path, params.contents));
+          return jsonResult(await workspaceWrite(context, params.path, params.contents, signal));
         },
       }),
       defineTool({
@@ -65,8 +65,8 @@ export function createToolRegistry(
           note: Type.String(),
           evidenceMessageIds: Type.Array(Type.String()),
         }),
-        execute: async (_toolCallId, params) =>
-          jsonResult(await memoryPropose(context, { ...params, source: "conversation" })),
+        execute: async (_toolCallId, params, signal) =>
+          jsonResult(await memoryPropose(context, { ...params, source: "conversation" }, signal)),
       }),
     );
   }
@@ -77,8 +77,14 @@ export function createToolRegistry(
         label: "Fetch URL",
         description: "Fetch a URL with timeout, content-type, and size limits.",
         parameters: Type.Object({ url: Type.String() }),
-        execute: async (_toolCallId, params) =>
-          jsonResult(await fetchUrl({ url: params.url, maxBytes: config.context.maxFileReadBytes })),
+        execute: async (_toolCallId, params, signal) =>
+          jsonResult(
+            await fetchUrl({
+              url: params.url,
+              maxBytes: config.context.maxFileReadBytes,
+              ...(signal ? { signal } : {}),
+            }),
+          ),
       }),
     );
   }
@@ -90,10 +96,11 @@ export function createToolRegistry(
         label: "Read Attachment",
         description: "Read an attachment through its attachment:// reference.",
         parameters: Type.Object({ ref: Type.String(), maxBytes: Type.Optional(Type.Number()) }),
-        execute: async (_toolCallId, params) =>
+        execute: async (_toolCallId, params, signal) =>
           readAttachmentToolContent(attachmentCache, {
             ...params,
             maxBytes: params.maxBytes ?? config.context.maxFileReadBytes,
+            ...(signal ? { signal } : {}),
           }),
       }),
     );
@@ -109,7 +116,8 @@ export function createToolRegistry(
         label: "Search Internet",
         description: "Search the internet for up-to-date information.",
         parameters: Type.Object({ query: Type.String() }),
-        execute: async (_toolCallId, params) => jsonResult(await searchInternet(params, { kind, apiKey })),
+        execute: async (_toolCallId, params, signal) =>
+          jsonResult(await searchInternet(params, { kind, apiKey }, signal)),
       }),
     );
   }
@@ -122,7 +130,8 @@ export function createToolRegistry(
           ? "Execute an argv command in a bwrap sandbox bound to the current guild workspace."
           : "Execute an argv command in the current guild workspace directory (no sandbox isolation).",
         parameters: Type.Object({ argv: Type.Array(Type.String()) }),
-        execute: async (_toolCallId, params) => jsonResult(await sandboxExec(context, config, params)),
+        execute: async (_toolCallId, params, signal) =>
+          jsonResult(await sandboxExec(context, config, params, signal)),
       }),
     );
   }

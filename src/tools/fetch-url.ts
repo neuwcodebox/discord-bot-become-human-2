@@ -4,6 +4,7 @@ export async function fetchUrl(input: {
   maxBytes?: number;
   allowedContentTypes?: string[];
   maxErrorBodyBytes?: number;
+  signal?: AbortSignal;
 }): Promise<{
   url: string;
   contentType: string;
@@ -18,7 +19,9 @@ export async function fetchUrl(input: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(input.url, { signal: controller.signal, redirect: "follow" });
+    input.signal?.throwIfAborted();
+    const signal = input.signal ? AbortSignal.any([controller.signal, input.signal]) : controller.signal;
+    const response = await fetch(input.url, { signal, redirect: "follow" });
     const contentType = response.headers.get("content-type") ?? "application/octet-stream";
     if (!response.ok) {
       const preview = await readTextPreview(response, maxErrorBodyBytes);

@@ -19,6 +19,49 @@ import { createTestWorkspace } from "./helpers/workspace.js";
 afterEach(() => vi.useRealTimers());
 
 describe("conversation responder", () => {
+  it("keeps accepted corrections in the context when retrying an empty response", async () => {
+    const run = vi
+      .fn<AgentRunner["run"]>()
+      .mockImplementationOnce(async (request) => {
+        request.onControlReady?.({ steer: () => true });
+        return { text: "" };
+      })
+      .mockResolvedValue({ text: "부산 기준 답변" });
+    const fixture = await createFixture({ run });
+    await fixture.responder.reply(fixture.task, fixture.events, fixture.workspace, fixture.discord.message, {
+      onControlReady: (control) => {
+        control.steer("관찰된 정정: 부산 기준으로");
+      },
+    });
+    expect(run.mock.calls[1]?.[0].messages).toContainEqual({
+      role: "user",
+      content: "관찰된 정정: 부산 기준으로",
+    });
+    expect(fixture.discord.sentMessages.map((message) => message.content)).toEqual(["부산 기준 답변"]);
+  });
+
+  it.each([false, true])(
+    "does not retry or publish a reply cancelled during generation, streaming=%s",
+    async (streaming) => {
+      const controller = new AbortController();
+      const run = vi.fn<AgentRunner["run"]>(async (request) => {
+        controller.abort();
+        await expect(request.onTextDelta?.("late output")).rejects.toThrow();
+        return { text: "" };
+      });
+      const fixture = await createFixture({ run }, { streaming });
+      await fixture.responder.reply(
+        fixture.task,
+        fixture.events,
+        fixture.workspace,
+        fixture.discord.message,
+        { signal: controller.signal },
+      );
+      expect(run).toHaveBeenCalledOnce();
+      expect(fixture.discord.sentMessages).toEqual([]);
+    },
+  );
+
   it.each([false, true])("sends the generated reply with streaming=%s", async (streaming) => {
     const run = vi.fn<AgentRunner["run"]>(async (request) => {
       await request.onTextDelta?.("hello");

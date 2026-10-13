@@ -832,6 +832,9 @@ server relationship, preferences, important past context, things to avoid, notes
 
 ### 9.3 compaction
 
+같은 guild의 event append는 EventLog 인스턴스에 관계없이 직렬화해 고유한 증가 cursor를
+할당한다. `.cursor`는 여전히 compaction 위치이고, event ID 할당에 사용하지 않는다.
+
 최근 event가 충분히 쌓였거나 대화 단위가 끝나면 오래된 안전 구간을 LLM 요약으로 압축하여
 `history.jsonl`에 append한다. 요약 LLM 호출이 실패하거나 빈 결과를 반환하면 `[RAW]` fallback summary를
 저장한다. 최근 `conversation.maxRecentMessages` 범위는 live transcript로 유지하고, 오래된 prefix만
@@ -1009,13 +1012,30 @@ discord_get_channel
   현재 채널 이름, 타입, topic 조회
 
 discord_search_history
-  현재 guild workspace의 events.jsonl/history.jsonl 검색
+  현재 channel/thread의 저장된 메시지 본문과 안전한 단일 채널 archive 검색
+  날짜·작성자 필터, 시간순 조회, snapshotCursor/offset 페이지 조회 지원
 
 discord_send_message
   현재 채널에 독립 메시지 전송 (주 응답 외 추가 메시지가 필요한 경우에만 사용)
 ```
 
 `discord_delete_own`은 봇 자신이 보낸 메시지만 삭제할 수 있다.
+
+`discord_search_history`는 별도 검색 모델이나 관련도 계산 없이 기존 응답 agent가 기록을 읽는
+수단이다. `query`를 생략하면 날짜 범위의 대화를 조회해 따라잡기 요약에 사용할 수 있다.
+`after`는 시간대가 포함된 ISO timestamp의 포함 하한, `before`는 제외 상한이며, `authorId`,
+`order` (`newest`/`oldest`), `maxResults` (1–100, 기본 20)을 지원한다. 결과는 최신 메시지
+버전으로 합치고 삭제된 메시지와 다른 guild/channel 기록을 제외한다. 다른 채널이 섞인 archive와
+수정·삭제로 무효화된 archive도 제외한다. 첫 결과의 `snapshotCursor`와 `nextOffset`을 후속
+조회에 전달하면 신규 메시지가 들어와도 같은 기록 범위를 페이지로 읽는다. archive의 범위도
+첫 결과의 `archiveSnapshotCursor`로 고정하며 후속 조회에 함께 전달한다. 조회 사이 수정·삭제된
+내용은 최신 상태로 반영하거나 숨기되 기존 페이지 위치를 유지해 아직 읽지 않은 기록을 건너뛰지
+않는다. 본문과 페이지 크기는 `context.maxToolResultChars` 안에서 완전한 JSON과 페이지 정보를
+유지하도록 제한하고 `truncated`를 표시한다.
+
+원문 메시지 URL은 도구 결과의 내부 참조다. 기본 답변은 과거 대화를 자연스럽게 떠올리는
+방식으로 작성하며 검색 수행이나 출처 링크를 매번 표시하지 않는다. 사용자가 어디서 말했는지
+물었을 때만 원문 링크를 제공한다. 기록이 뒷받침하지 않는 사실을 기억한다고 단정하지 않는다.
 
 포함하지 않는 기능:
 
@@ -1189,7 +1209,6 @@ Hard gate에 의해 응답이 불가능한 경우에는 response generation agen
 - bot mention
 - bot message에 대한 reply
 - bot 이름/별칭 직접 호출
-- slash command
 ```
 
 강한 trigger가 아니고 ambient engagement 조건을 만족하면 engagement decision call을 실행할 수 있다.
@@ -1255,6 +1274,12 @@ type StayDecision = {
     | "low"
     | "none";
 
+  responseControl?: {
+    responseId: string;
+    action: "continue" | "update" | "cancel";
+    messageIds: string[];
+  };
+
   disengageReason?:
     | "conversation_ended"
     | "topic_moved_without_bot"
@@ -1300,9 +1325,9 @@ engaged 상태의 억제 원칙:
 - stay decision context에는 `cooldownUntil`, `pendingFollowUp`, `pendingTimer` 같은 런타임
   스케줄링 필드를 넣지 않는다. decide 단계에 도달했다면 cooldown 여부는 이미 orchestrator가
   처리한 것이다.
-- `wait` decision은 pending batch를 한 번 더 짧게 재스케줄한다. 새 human message가 batch에
-  추가되면 `waitCount`는 리셋된다. 재시도 후에도 계속 `wait`이면 이번 batch는 말하지 않고
-  흘려보낸다.
+- `wait` decision은 같은 미처리 batch를 한 번만 다시 스케줄한다. 그 사이 새 human message가
+  추가되어도 기존 batch의 재시도 횟수와 첫 도착 시각은 유지한다. 계속 들어오는 채팅 때문에
+  판단을 무한히 재시도하지 않는다. 재시도 후에도 `wait`이면 이번 batch는 조용히 흘려보낸다.
 - `react` decision은 즉시 disengage로 해석하지 않는다. `stayEngaged=false`가 같이 오더라도
   reaction 실행 후 engaged 상태를 잠깐 유지하고, 이후 idle timeout으로 자연스럽게 빠진다.
 - reaction agent는 `targetMessageIds` 중 하나에 자연스러운 emoji reaction을 하나 추가한다. 도구
@@ -1312,6 +1337,48 @@ engaged 상태의 억제 원칙:
 - directed_at_bot이면 replyConfidenceThreshold를 낮게 적용한다.
 - 여러 사용자가 빠르게 대화 중이면 debounce를 길게 잡고 마지막 맥락을 본다.
 ```
+
+---
+
+### 14.6 메시지 스트림과 진행 중 응답
+
+메시지 수신, 대화 판단, 응답 생성은 독립된 진행 경로다. 수신은 event 기록과 conversation별
+buffer 추가까지만 수행하며, 모델 판단·응답 생성·compaction/Dream 완료를 기다리지 않는다.
+각 conversation은 동시에 판단 하나와 응답 하나만 실행한다. 서로 다른 channel/thread의
+transcript와 제어는 섞지 않는다.
+
+- 수신 메시지에는 conversation 내부 sequence를 부여하고 미처리 buffer에 넣는다.
+- 판단을 시작할 때 새 메시지 ID 범위와 transcript를 snapshot으로 확정한다. 판단 중에 도착한
+  메시지는 다음 buffer에 남으며, 이미 확정된 판단 입력에 끼워 넣지 않는다. 새 메시지가
+  recent-context 수보다 많아도 이번 새 메시지를 단순히 recent window로 잘라 버리지 않는다.
+- transcript는 미뤄 둔 메시지의 최초 도착 시각이 아니라 이번 판단 시작 시점의 event log를 읽는다.
+  그 사이 완료된 봇 답변과 메시지 수정·삭제를 포함하고, 이후 들어온 새 입력은 다음 batch에 남긴다.
+- 첫 미처리 메시지의 도착 시각을 기준으로 max wait를 유지한다. 후속 메시지가 도착해도
+  절대 deadline은 초기화하지 않는다.
+- 진행 중 응답이 없을 때는 기존 engagement/stay 판단과 debounce 정책을 사용한다.
+- 진행 중 응답이 있을 때 일반 사람 간 채팅만으로 판단을 앞당기지 않는다. 현재 요청자의
+  메시지 또는 봇에 대한 멘션·답장이 포함된 batch를 기존 stay decision에 넘긴다. 주변 채팅도
+  맥락으로 함께 제공한다. 이 admission 조건은 작성자·답장 관계이고 자연어 의도 분류가 아니다.
+- 기존 stay 모델에 원래 요청, 실행 ID, 요청자, 정정 사용 횟수, 제한된 visible text preview,
+  이번 incoming message IDs를 제공한다. 중단·정정의 의미는 이 모델만 판단하며, 새 명령어나
+  자연어 문구 매칭, 별도 의도 분류 호출을 추가하지 않는다.
+- `continue`는 현재 답변을 그대로 계속한다. `update`는 모델이 선택한 새 메시지만 pi steering에
+  전달한다. `cancel`은 해당 실행의 AbortController를 중단한다. 높은 confidence, snapshot의
+  실행 ID 일치, 이번 batch의 유효한 근거 ID 및 요청자/명시적 답장·멘션 관계를 검증한다.
+- 응답당 steering은 최대 한 번이다. 이후 정정 또는 별도 질문은 후속 대상으로 보존하고 현재
+  응답이 끝난 뒤 판단한다. 모델이 이미 후속 요청으로 선택한 메시지는 자동 idle 이탈로 버리지
+  않는다. 모든 수신 메시지를 steer하거나, 채팅이 올 때마다 응답을 다시 시작하지 않는다.
+- 응답이 끝난 후 돌아온 늦은 cancel 결과를 다음 실행에 적용하지 않는다. 늦은 update는
+  후속으로 처리한다. 발화 cooldown은 진행 중 응답의 중단·정정 판단을 막지 않는다.
+- 중단 요청과 별도 새 질문이 한 batch에 있으면 현재 응답만 취소하고 모델이 선택한 새 질문은
+  후속 대상으로 보존한다.
+- 새 human 메시지가 응답 생성 중 도착했다는 사실과 pending buffer는 응답 완료 시 카운터를
+  갱신하면서 지우지 않는다.
+- 일반 잡담 때문에 진행 중 질문을 포기하거나 자동으로 재생성하지 않는다. 여러 사람에게
+  답하는 중 한 사람의 질문 철회는 다른 사람의 요청까지 취소하는 것으로 해석하지 않는다.
+
+생성 중 관련 메시지를 읽기 위해 stay 호출 수가 늘 수 있지만, 별도의 검색·분류 모델은 없다.
+중단은 batch와 모델 판단 이후 적용되며, 정정은 pi의 다음 턴 경계에서 반영한다.
 
 ---
 
@@ -1403,6 +1470,8 @@ developer:
 user:
   - engagedSince 이후의 시간순 transcript
   - 최근 human messages
+  - 이번 판단에 새로 포함된 incoming message IDs
+  - 진행 중 응답의 원래 요청과 실행 snapshot (해당하는 경우)
   - bot message에 대한 reply/reaction 여부
 ```
 
@@ -1668,7 +1737,14 @@ large file
 
 응답 agent는 대화 참여 상태 전이를 담당하지 않는다. 상태 전이는 orchestrator가 decision 결과와 실제 전송 결과를 보고 처리한다.
 
-응답 준비·생성·전송이 완료되거나 실패하면 입력 중 표시를 유지하는 타이머를 정리한다.
+응답 준비·생성·전송이 완료되거나 실패하거나 취소되면 입력 중 표시를 유지하는 타이머를 정리한다.
+외부 AbortSignal은 pi의 agent.abort에 연결하고 종료 시 연결을 해제한다. 취소된 응답은 빈 응답
+재시도나 fallback 문구를 보내지 않는다. 취소 이후 도구 시작·Discord 전송/편집을 막고 진행 중
+네트워크 요청·sandbox process에도 신호를 전달한다. 이미 완료된 외부 작업은 되돌리지 않는다.
+프로세스 종료 시 conversation 타이머와 진행 중 응답도 정리한다.
+
+여러 assistant 턴의 visible text는 별도 메시지 흐름으로 처리해, steering 후 이전 텍스트와
+새 답변을 잘못 이어 붙이거나 최종 전송에서 앞선 분할 구간을 반복하지 않는다.
 
 Agent event 중 Discord에 표시하는 것은 visible assistant text와 runtime status뿐이다. tool call arguments, hidden reasoning, 내부 schema output은 Discord에 표시하지 않는다.
 
@@ -1676,7 +1752,7 @@ Agent event 중 Discord에 표시하는 것은 visible assistant text와 runtime
 
 ```txt
 - 현재 run 완료 후 follow-up으로 처리
-- 명시적 중단 요청이면 agent abort
+- 기존 stay 모델이 현재 요청에 대한 중단 의도를 판단하면 해당 agent abort
 - 중요한 정정/추가 정보면 steering 또는 follow-up으로 전달
 - 관련 없는 메시지면 event 기록만 수행
 ```

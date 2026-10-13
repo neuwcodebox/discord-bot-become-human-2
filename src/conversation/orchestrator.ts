@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { Message } from "discord.js";
 import type { AgentRunner } from "../agent/runner.js";
+import { truncateText } from "../context/limits.js";
 import { AttachmentCache } from "../discord/attachment-cache.js";
 import { childLogger } from "../logger.js";
 import { buildCompactionSummaryContext, MemoryCompactor } from "../memory/compactor.js";
@@ -7,6 +9,8 @@ import { DreamRunner } from "../memory/dream-runner.js";
 import { DreamScheduler } from "../memory/dream-scheduler.js";
 import { EventLog } from "../memory/event-log.js";
 import type {
+  ActiveResponseSnapshot,
+  AgentRunControl,
   AppConfig,
   BotIdentity,
   ConversationRuntimeState,
@@ -17,27 +21,61 @@ import type {
   NormalizedDiscordMessage,
   StayDecision,
 } from "../types.js";
-import { delay, randomDebounceMs } from "./debounce.js";
+import { randomDebounceMs } from "./debounce.js";
 import { decideEngagement, directEngagementDecision } from "./engagement-decision.js";
 import {
   appendFollowUpMessage,
   computeFollowUpFlushDelayMs,
-  markFollowUpWait,
   shouldFlushByMessageCount,
 } from "./follow-up-batch.js";
-import { checkReplyHardGates, isDirectedAtBot, noteBotReply, noteHumanMessage } from "./reply-cadence.js";
+import {
+  checkReplyHardGates,
+  isDirectedAtBot,
+  noteBotReply,
+  noteHumanMessage,
+  type ReplyGateResult,
+} from "./reply-cadence.js";
 import { ConversationResponder } from "./responder.js";
 import { ConversationStateStore, conversationId } from "./state-store.js";
 import { decideStay, forcedSilentStay } from "./stay-decision.js";
+import { buildTranscript, materializeMessages } from "./transcript-builder.js";
 
 const log = childLogger("conversation");
-const maxFollowUpWaitRetries = 1;
+type MessageEvent = Extract<NormalizedDiscordEvent, { type: "message_create" }>;
+type ReceivedMessage = {
+  sequence: number;
+  receivedAt: string;
+  event: MessageEvent;
+  discordMessage?: Message<boolean>;
+  previousLastHumanAt?: string;
+  directedByModel?: boolean;
+};
+type ActiveResponse = ActiveResponseSnapshot & {
+  controller: AbortController;
+  control: AgentRunControl | undefined;
+  pendingSteering: string | undefined;
+};
+type ConversationStream = {
+  workspace: GuildWorkspace;
+  state: ConversationRuntimeState;
+  receivedSequence: number;
+  decidedSequence: number;
+  pending: ReceivedMessage[];
+  deferred: ReceivedMessage[];
+  deciding: boolean;
+  decisionController: AbortController | undefined;
+  waitCount: number;
+  active: ActiveResponse | undefined;
+};
 
 export class ConversationOrchestrator {
   private readonly states = new ConversationStateStore();
+  private readonly streams = new Map<string, ConversationStream>();
+  private readonly maintenance = new Map<string, Promise<void>>();
   private readonly attachmentCache = new AttachmentCache();
   private readonly dreamScheduler: DreamScheduler;
   private readonly responder: ConversationResponder;
+  private closed = false;
 
   constructor(
     private readonly config: AppConfig,
@@ -49,364 +87,469 @@ export class ConversationOrchestrator {
     this.responder = new ConversationResponder(config, agentsPath, runner, botIdentity, this.attachmentCache);
   }
 
+  /** Intake never waits for a model, a response, or memory maintenance. */
   async onMessage(
-    event: Extract<NormalizedDiscordEvent, { type: "message_create" }>,
+    event: MessageEvent,
     workspace: GuildWorkspace,
     discordMessage?: Message<boolean>,
   ): Promise<void> {
-    const message = event.payload;
-    this.attachmentCache.remember(message);
-    if (message.author.isBot) {
-      log.debug(
-        { guildId: event.guildId, channelId: event.channelId, messageId: event.messageId },
-        "bot-authored message ignored",
-      );
-      return;
+    this.attachmentCache.remember(event.payload);
+    if (this.closed || event.payload.author.isBot) return;
+    const id = conversationId(event.payload);
+    let stream = this.streams.get(id);
+    if (!stream) {
+      stream = {
+        workspace,
+        state: this.states.get(id),
+        receivedSequence: 0,
+        decidedSequence: 0,
+        pending: [],
+        deferred: [],
+        deciding: false,
+        decisionController: undefined,
+        waitCount: 0,
+        active: undefined,
+      };
+      this.streams.set(id, stream);
     }
-    const id = conversationId(message);
-    await this.states.enqueue(
-      id,
-      () => this.processMessage(event, workspace, discordMessage),
-      (err) => {
-        log.error(
-          { err, guildId: event.guildId, channelId: event.channelId, messageId: event.messageId },
-          "message processing failed",
-        );
-      },
-    );
-  }
-
-  private async processMessage(
-    event: Extract<NormalizedDiscordEvent, { type: "message_create" }>,
-    workspace: GuildWorkspace,
-    discordMessage?: Message<boolean>,
-  ): Promise<void> {
-    const message = event.payload;
-    const id = conversationId(message);
-    const state = this.states.get(id);
-
-    const relatedToBot = this.isStrongTrigger(message);
-    const previousLastHumanAt = state.lastHumanMessageAt;
-    noteHumanMessage(state, relatedToBot);
-    log.debug(
-      {
-        guildId: event.guildId,
-        channelId: event.channelId,
-        messageId: event.messageId,
-        conversationId: id,
-        engagement: state.engagement,
-        relatedToBot,
-      },
-      "conversation message received",
-    );
+    const previousLastHumanAt = stream.state.lastHumanMessageAt;
+    noteHumanMessage(stream.state, this.isStrongTrigger(event.payload));
+    stream.pending.push({
+      sequence: ++stream.receivedSequence,
+      receivedAt: new Date().toISOString(),
+      event,
+      ...(discordMessage ? { discordMessage } : {}),
+      ...(previousLastHumanAt ? { previousLastHumanAt } : {}),
+    });
+    if (stream.pending.length === 1 && !stream.deciding) stream.waitCount = 0;
     this.dreamScheduler.startForGuild(workspace);
-    const compacted = await this.compact(workspace);
-    if (compacted && this.config.memory.dream.runOnCompaction) {
-      log.info({ guildId: workspace.guildId, reason: "compaction" }, "dream run triggered");
-      await this.dreamScheduler.runNow(workspace, "compaction");
-    }
-    const events = await new EventLog(workspace.workspaceRoot).readRecent(
-      this.config.conversation.maxRecentMessages,
-    );
-
-    if (state.engagement === "not_engaged") {
-      const decision = relatedToBot
-        ? directEngagementDecision(message, "direct trigger")
-        : await this.maybeAmbientEngage(workspace.workspaceRoot, state, events, message, previousLastHumanAt);
-      if (!decision?.engage) {
-        log.debug(
-          { guildId: workspace.guildId, channelId: event.channelId, messageId: event.messageId },
-          "message did not engage bot",
-        );
-        return;
-      }
-      state.engagement = "engaged";
-      state.engagedSince = new Date().toISOString();
-      state.lastEngagementChangedAt = state.engagedSince;
-      log.info(
-        {
-          guildId: workspace.guildId,
-          channelId: event.channelId,
-          messageId: event.messageId,
-          confidence: decision.confidence,
-          expectedRole: decision.expectedRole,
-        },
-        "conversation engaged",
-      );
-      const debounceRange = relatedToBot
-        ? this.config.conversation.notEngaged.directTriggerDebounceMs
-        : this.config.conversation.notEngaged.ambientDebounceMs;
-      await delay(randomDebounceMs(debounceRange));
-      await this.reply(decision, events, workspace, discordMessage);
-      return;
-    }
-
-    if (shouldIdleDisengage(this.config, state)) {
-      this.clearPendingFollowUp(state);
-      state.engagement = "not_engaged";
-      state.lastEngagementChangedAt = new Date().toISOString();
-      log.info(
-        { guildId: workspace.guildId, channelId: event.channelId, messageId: event.messageId },
-        "conversation disengaged by idle/unrelated gate",
-      );
-      return;
-    }
-
-    await this.queueEngagedFollowUp({
-      conversationKey: id,
-      state,
-      workspace,
-      discordMessage,
-      message,
-      relatedToBot,
-    });
+    this.startMaintenance(workspace);
+    this.schedule(stream);
   }
 
-  private async queueEngagedFollowUp(input: {
-    conversationKey: string;
-    state: ConversationRuntimeState;
-    workspace: GuildWorkspace;
-    discordMessage?: Message<boolean> | undefined;
-    message: NormalizedDiscordMessage;
-    relatedToBot: boolean;
-  }): Promise<void> {
-    const now = new Date();
-    const batch = appendFollowUpMessage({
-      batch: input.state.pendingFollowUp,
-      messageId: input.message.id,
-      relatedToBot: input.relatedToBot,
-      now,
-    });
-    input.state.pendingFollowUp = batch;
-    if (input.state.pendingTimer) clearTimeout(input.state.pendingTimer);
+  dispose(): void {
+    this.closed = true;
+    this.dreamScheduler.stopAll();
+    for (const stream of this.streams.values()) {
+      this.clearTimer(stream.state);
+      stream.decisionController?.abort();
+      stream.active?.controller.abort();
+    }
+  }
 
-    const config = this.config.conversation.engaged.followUpBatch;
-    const flushByCount = shouldFlushByMessageCount(batch, config);
-    const debounceMs = randomDebounceMs(
-      batch.relatedToBot ? config.directTriggerDebounceMs : config.quietDebounceMs,
+  private explicitAddress(message: NormalizedDiscordMessage): boolean {
+    return (
+      message.mentions.some((mention) => mention.id === this.botIdentity.userId) ||
+      message.replyTo?.authorId === this.botIdentity.userId
     );
-    const delayMs = flushByCount
+  }
+
+  private canAddressActive(input: ReceivedMessage, active: ActiveResponseSnapshot): boolean {
+    return (
+      active.requesterIds.includes(input.event.payload.author.id) || this.explicitAddress(input.event.payload)
+    );
+  }
+
+  private isDirectedInput(input: ReceivedMessage): boolean {
+    return input.directedByModel === true || this.isStrongTrigger(input.event.payload);
+  }
+
+  private schedule(stream: ConversationStream): void {
+    if (this.closed || stream.deciding || stream.pending.length === 0) return;
+    this.clearTimer(stream.state);
+    const active = stream.active;
+    if (active?.controller.signal.aborted) return;
+    if (active && !stream.pending.some((input) => this.canAddressActive(input, active))) return;
+    const first = stream.pending[0];
+    if (!first) return;
+    let batch = appendFollowUpMessage({
+      messageId: first.event.messageId,
+      relatedToBot: this.isDirectedInput(first),
+      now: new Date(first.receivedAt),
+    });
+    for (const input of stream.pending.slice(1)) {
+      batch = appendFollowUpMessage({
+        batch,
+        messageId: input.event.messageId,
+        relatedToBot: this.isDirectedInput(input),
+        now: new Date(input.receivedAt),
+      });
+    }
+    if (active) batch.relatedToBot = true;
+    batch.waitCount = stream.waitCount;
+    stream.state.pendingFollowUp = batch;
+    const followUp = this.config.conversation.engaged.followUpBatch;
+    const initial = stream.state.engagement === "not_engaged" && !active;
+    const range = initial
+      ? batch.relatedToBot
+        ? this.config.conversation.notEngaged.directTriggerDebounceMs
+        : this.config.conversation.notEngaged.ambientDebounceMs
+      : batch.relatedToBot
+        ? followUp.directTriggerDebounceMs
+        : followUp.quietDebounceMs;
+    const delayMs = shouldFlushByMessageCount(batch, followUp)
       ? 0
       : computeFollowUpFlushDelayMs({
           batch,
-          config,
-          state: input.state,
-          nowMs: now.getTime(),
-          debounceMs,
+          config: followUp,
+          state: stream.state,
+          nowMs: Date.now(),
+          debounceMs: randomDebounceMs(range),
         });
-    log.info(
-      {
-        guildId: input.workspace.guildId,
-        channelId: input.message.channelId,
-        messageId: input.message.id,
-        pendingMessageIds: batch.messageIds,
-        pendingCount: batch.messageIds.length,
-        relatedToBot: batch.relatedToBot,
-        delayMs,
-        flushByCount,
-      },
-      "engaged follow-up queued",
-    );
-
-    if (delayMs === 0) {
-      await this.flushEngagedFollowUp(input.conversationKey, input.workspace, input.discordMessage);
-      return;
-    }
-
-    input.state.pendingTimer = setTimeout(() => {
-      void this.states.enqueue(
-        input.conversationKey,
-        () => this.flushEngagedFollowUp(input.conversationKey, input.workspace, input.discordMessage),
-        (error) => {
-          log.error(
-            { err: error, guildId: input.workspace.guildId, channelId: input.message.channelId },
-            "engaged follow-up flush failed",
-          );
-        },
-      );
+    stream.state.pendingTimer = setTimeout(() => {
+      void this.drain(stream);
     }, delayMs);
-    input.state.pendingTimer.unref();
+    stream.state.pendingTimer.unref();
   }
 
-  private async flushEngagedFollowUp(
-    conversationKey: string,
-    workspace: GuildWorkspace,
-    discordMessage?: Message<boolean>,
-  ): Promise<void> {
-    const state = this.states.get(conversationKey);
-    const batch = state.pendingFollowUp;
-    if (!batch) return;
-    this.clearPendingFollowUp(state);
-    if (state.engagement !== "engaged") return;
-    if (!discordMessage) {
-      log.warn({ guildId: workspace.guildId }, "engaged follow-up flush skipped without discord message");
-      return;
-    }
-
-    const events = await new EventLog(workspace.workspaceRoot).readRecent(
-      this.config.conversation.maxRecentMessages,
-    );
-    const currentMessage = findMessageById(events, batch.messageIds.at(-1));
-    if (!currentMessage) {
-      log.warn(
-        {
-          guildId: workspace.guildId,
-          channelId: discordMessage.channelId,
-          pendingMessageIds: batch.messageIds,
-        },
-        "engaged follow-up flush skipped because latest message is missing from event log",
-      );
-      return;
-    }
-
-    log.info(
-      {
-        guildId: workspace.guildId,
-        channelId: discordMessage.channelId,
-        pendingMessageIds: batch.messageIds,
-        pendingCount: batch.messageIds.length,
-        relatedToBot: batch.relatedToBot,
-      },
-      "engaged follow-up flushing",
-    );
-    const gate = checkReplyHardGates(this.config, state, currentMessage, {
-      unprompted: false,
-      allowDuringCooldown: true,
-      allowBeforeMinReplyInterval: true,
-      botUserId: this.botIdentity.userId,
-      botNames: this.botIdentity.names,
-    });
-    const stay = gate.allowed
-      ? await decideStay({
-          runner: this.runner,
-          agentsPath: this.agentsPath,
-          workspaceRoot: workspace.workspaceRoot,
-          state,
-          events,
-          currentMessage,
-          timezone: this.config.runtime.timezone,
-          botIdentity: this.botIdentity,
-        })
-      : forcedSilentStay(gate.reason, currentMessage.id);
-    log.info(
-      {
-        guildId: workspace.guildId,
-        channelId: discordMessage.channelId,
-        pendingMessageIds: batch.messageIds,
-        action: stay.action,
-        confidence: stay.confidence,
-        reason: stay.reason,
-      },
-      "engaged follow-up stay decided",
-    );
-    if (stay.action === "disengage" || (!stay.stayEngaged && stay.action !== "react")) {
-      this.clearPendingFollowUp(state);
-      state.engagement = "not_engaged";
-      state.lastEngagementChangedAt = new Date().toISOString();
+  private async drain(stream: ConversationStream): Promise<void> {
+    if (this.closed || stream.deciding || stream.pending.length === 0) return;
+    this.clearTimer(stream.state);
+    let batch = stream.pending;
+    const lastSequence = batch.at(-1)?.sequence ?? 0;
+    stream.pending = [];
+    delete stream.state.pendingFollowUp;
+    stream.deciding = true;
+    const decisionController = new AbortController();
+    stream.decisionController = decisionController;
+    const activeAtStart = stream.active ? snapshotActive(stream.active) : undefined;
+    let waiting = false;
+    const stateAtStart = {
+      ...stream.state,
+      recentBotMessageIds: [...stream.state.recentBotMessageIds],
+      ambientReplyTimes: [...stream.state.ambientReplyTimes],
+    };
+    try {
+      const events = await this.readSnapshot(stream, batch);
+      const latestMessages = new Map(materializeMessages(events).map((message) => [message.id, message]));
+      batch = batch.flatMap((input) => {
+        const message = latestMessages.get(input.event.messageId);
+        if (message && !message.deletedAt) this.attachmentCache.remember(message);
+        return message && !message.deletedAt
+          ? [{ ...input, event: { ...input.event, payload: message } }]
+          : [];
+      });
+      const current = batch.at(-1);
+      if (!current || this.closed) return;
+      const incomingMessageIds = batch.map((input) => input.event.messageId);
+      if (stateAtStart.engagement === "not_engaged" && !activeAtStart) {
+        const direct = batch.findLast((input) => this.isDirectedInput(input));
+        const decision = direct
+          ? {
+              ...directEngagementDecision(direct.event.payload, "direct trigger"),
+              targetMessageIds: batch
+                .filter(
+                  (input) =>
+                    this.isDirectedInput(input) ||
+                    input.event.payload.author.id === direct.event.payload.author.id,
+                )
+                .map((input) => input.event.messageId),
+            }
+          : await this.maybeAmbientEngage(
+              stream.workspace.workspaceRoot,
+              stream.state,
+              events,
+              current.event.payload,
+              batch[0]?.previousLastHumanAt,
+              decisionController.signal,
+            );
+        if (this.closed || !decision?.engage) return;
+        stream.state.engagement = "engaged";
+        stream.state.engagedSince = new Date().toISOString();
+        stream.state.lastEngagementChangedAt = stream.state.engagedSince;
+        this.startResponse(stream, decision, events, batch);
+        return;
+      }
+      if (
+        !activeAtStart &&
+        !batch.some((input) => this.isDirectedInput(input)) &&
+        shouldIdleDisengage(this.config, stateAtStart)
+      ) {
+        stream.state.engagement = "not_engaged";
+        stream.state.lastEngagementChangedAt = new Date().toISOString();
+        return;
+      }
+      const gate: ReplyGateResult = activeAtStart
+        ? { allowed: true }
+        : checkReplyHardGates(this.config, stateAtStart, current.event.payload, {
+            unprompted: false,
+            allowDuringCooldown: true,
+            allowBeforeMinReplyInterval: true,
+            botUserId: this.botIdentity.userId,
+            botNames: this.botIdentity.names,
+          });
+      let stay = gate.allowed
+        ? await decideStay({
+            runner: this.runner,
+            agentsPath: this.agentsPath,
+            workspaceRoot: stream.workspace.workspaceRoot,
+            state: stateAtStart,
+            events,
+            currentMessage: current.event.payload,
+            incomingMessageIds,
+            timezone: this.config.runtime.timezone,
+            botIdentity: this.botIdentity,
+            signal: decisionController.signal,
+            ...(activeAtStart ? { activeResponse: activeAtStart } : {}),
+          })
+        : forcedSilentStay(gate.reason, current.event.messageId);
+      if (this.closed) return;
+      stay = {
+        ...stay,
+        targetMessageIds: stay.targetMessageIds.filter((id) => incomingMessageIds.includes(id)),
+      };
       log.info(
         {
-          guildId: workspace.guildId,
-          channelId: discordMessage.channelId,
-          messageId: currentMessage.id,
+          guildId: stream.workspace.guildId,
+          channelId: current.event.channelId,
+          firstSequence: batch[0]?.sequence,
+          lastSequence: current.sequence,
+          pendingCount: batch.length,
           action: stay.action,
-          reason: stay.reason,
           confidence: stay.confidence,
+          responseControl: stay.responseControl?.action,
         },
-        "conversation disengaged by stay decision",
+        "stream batch decided",
       );
-      return;
-    }
-    if (stay.action === "wait") {
-      if (batch.waitCount < maxFollowUpWaitRetries) {
-        const waitBatch = markFollowUpWait(batch, new Date());
-        const config = this.config.conversation.engaged.followUpBatch;
-        const delayMs = randomDebounceMs(
-          waitBatch.relatedToBot ? config.directTriggerDebounceMs : config.quietDebounceMs,
-        );
-        state.pendingFollowUp = waitBatch;
-        state.pendingTimer = setTimeout(() => {
-          void this.states.enqueue(
-            conversationKey,
-            () => this.flushEngagedFollowUp(conversationKey, workspace, discordMessage),
-            (error) => {
-              log.error(
-                { err: error, guildId: workspace.guildId, channelId: discordMessage.channelId },
-                "engaged follow-up wait retry failed",
-              );
-            },
+      if (stay.confidence >= this.config.conversation.engaged.replyConfidenceThreshold && activeAtStart) {
+        const result = this.applyResponseControl(stream, activeAtStart, stay, batch, events);
+        if (result === "cancelled") {
+          if (stay.action === "reply") {
+            this.deferResponse(
+              stream,
+              batch,
+              stay.targetMessageIds.filter((id) => !stay.responseControl?.messageIds.includes(id)),
+            );
+          }
+          return;
+        }
+        if (result === "updated") {
+          stay = {
+            ...stay,
+            targetMessageIds: stay.targetMessageIds.filter(
+              (id) => !stay.responseControl?.messageIds.includes(id),
+            ),
+          };
+          if (stay.action !== "reply" || stay.targetMessageIds.length === 0) return;
+        }
+        if (result === "follow_up") {
+          stay = {
+            ...stay,
+            action: "reply",
+            stayEngaged: true,
+            targetMessageIds:
+              stay.responseControl?.messageIds.filter((id) => incomingMessageIds.includes(id)) ?? [],
+          };
+        }
+      }
+      if (stay.action === "disengage" || (!stay.stayEngaged && stay.action !== "react")) {
+        if (!stream.active) {
+          stream.state.engagement = "not_engaged";
+          stream.state.lastEngagementChangedAt = new Date().toISOString();
+        }
+        return;
+      }
+      if (stay.action === "wait" && stream.waitCount < 1) {
+        waiting = true;
+        stream.waitCount += 1;
+        stream.pending = mergeInputs(batch, stream.pending);
+        return;
+      }
+      if (
+        stay.action === "react" &&
+        stay.confidence >= this.config.conversation.engaged.silentStayConfidenceThreshold
+      ) {
+        const target = batch.findLast((input) => stay.targetMessageIds.includes(input.event.messageId));
+        if (target?.discordMessage)
+          await this.responder.react(
+            stay,
+            events,
+            stream.workspace,
+            target.discordMessage,
+            target.event.payload,
           );
-        }, delayMs);
-        state.pendingTimer.unref();
-        log.info(
-          {
-            guildId: workspace.guildId,
-            channelId: discordMessage.channelId,
-            messageId: currentMessage.id,
-            pendingMessageIds: waitBatch.messageIds,
-            waitCount: waitBatch.waitCount,
-            delayMs,
-            confidence: stay.confidence,
-            reason: stay.reason,
-          },
-          "engaged follow-up wait rescheduled",
-        );
         return;
       }
-      log.info(
-        {
-          guildId: workspace.guildId,
-          channelId: discordMessage.channelId,
-          messageId: currentMessage.id,
-          pendingMessageIds: batch.messageIds,
-          waitCount: batch.waitCount,
-          confidence: stay.confidence,
-          reason: stay.reason,
-        },
-        "engaged follow-up wait exhausted",
-      );
-    }
-    if (stay.action === "react") {
-      if (stay.confidence < this.config.conversation.engaged.silentStayConfidenceThreshold) {
-        log.info(
-          {
-            guildId: workspace.guildId,
-            channelId: discordMessage.channelId,
-            messageId: currentMessage.id,
-            action: stay.action,
-            confidence: stay.confidence,
-            reason: stay.reason,
-          },
-          "engaged reaction skipped below confidence threshold",
-        );
+      if (
+        stay.action !== "reply" ||
+        stay.confidence < this.config.conversation.engaged.replyConfidenceThreshold ||
+        stay.targetMessageIds.length === 0
+      )
         return;
-      }
-      await this.responder.react(stay, events, workspace, discordMessage, currentMessage);
-      return;
+      if (stream.active) {
+        this.deferResponse(stream, batch, stay.targetMessageIds);
+      } else this.startResponse(stream, stay, events, batch);
+    } catch (error) {
+      if (!decisionController.signal.aborted)
+        log.error({ err: error, guildId: stream.workspace.guildId }, "stream batch processing failed");
+    } finally {
+      stream.decidedSequence = Math.max(stream.decidedSequence, lastSequence);
+      stream.deciding = false;
+      stream.decisionController = undefined;
+      if (!waiting) stream.waitCount = 0;
+      this.schedule(stream);
     }
-    if (
-      stay.action !== "reply" ||
-      stay.confidence < this.config.conversation.engaged.replyConfidenceThreshold
-    ) {
-      log.info(
-        {
-          guildId: workspace.guildId,
-          channelId: discordMessage.channelId,
-          messageId: currentMessage.id,
-          action: stay.action,
-          confidence: stay.confidence,
-          reason: stay.reason,
-        },
-        "engaged conversation stayed silent",
-      );
-      return;
-    }
-    await this.reply(stay, events, workspace, discordMessage);
   }
 
-  private clearPendingFollowUp(state: ConversationRuntimeState): void {
+  private deferResponse(stream: ConversationStream, batch: ReceivedMessage[], ids: string[]): void {
+    stream.deferred = mergeInputs(
+      stream.deferred,
+      batch
+        .filter((input) => ids.includes(input.event.messageId))
+        .map((input) => ({ ...input, directedByModel: true })),
+    );
+  }
+
+  private applyResponseControl(
+    stream: ConversationStream,
+    expected: ActiveResponseSnapshot,
+    stay: StayDecision,
+    batch: ReceivedMessage[],
+    events: NormalizedDiscordEvent[],
+  ): "ignored" | "updated" | "cancelled" | "follow_up" {
+    const command = stay.responseControl;
+    if (!command || command.action === "continue" || command.responseId !== expected.id) return "ignored";
+    const evidence = batch.filter(
+      (input) => command.messageIds.includes(input.event.messageId) && this.canAddressActive(input, expected),
+    );
+    if (evidence.length === 0 || evidence.length !== new Set(command.messageIds).size) return "ignored";
+    const active = stream.active;
+    if (!active || active.id !== expected.id || active.controller.signal.aborted)
+      return command.action === "update" ? "follow_up" : "ignored";
+    if (command.action === "cancel") {
+      active.controller.abort();
+      if (!stay.stayEngaged) stream.state.engagement = "not_engaged";
+      return "cancelled";
+    }
+    if (active.updatesUsed >= 1) return "follow_up";
+    const contents =
+      "New observed Discord messages correct or add to the current task. Incorporate only what is relevant and finish your answer; do not repeat already sent text or expose internal control details.\n" +
+      buildTranscript(
+        events.filter((event) => evidence.some((input) => input.event.messageId === event.messageId)),
+        {
+          guildId: evidence[0]?.event.guildId ?? stream.workspace.guildId,
+          channelId: evidence[0]?.event.channelId ?? "",
+          targetMessageIds: evidence.map((input) => input.event.messageId),
+          timezone: this.config.runtime.timezone,
+          botUserId: this.botIdentity.userId,
+        },
+      );
+    if (active.control && !active.control.steer(contents)) return "follow_up";
+    if (!active.control) active.pendingSteering = contents;
+    active.updatesUsed += 1;
+    return "updated";
+  }
+
+  private startResponse(
+    stream: ConversationStream,
+    task: EngagementDecision | StayDecision,
+    events: NormalizedDiscordEvent[],
+    batch: ReceivedMessage[],
+  ): void {
+    if (this.closed || stream.active) return;
+    const input = batch.findLast((item) => task.targetMessageIds.includes(item.event.messageId));
+    if (!input?.discordMessage) return;
+    const targets = materializeMessages(events).filter((message) =>
+      task.targetMessageIds.includes(message.id),
+    );
+    const active: ActiveResponse = {
+      id: randomUUID(),
+      startedAt: new Date().toISOString(),
+      requesterIds: [...new Set(targets.map((message) => message.author.id))],
+      targetMessageIds: [...task.targetMessageIds],
+      updatesUsed: 0,
+      textPreview: "",
+      requestMessages: targets.map((message) => ({
+        id: message.id,
+        authorId: message.author.id,
+        text: truncateText(message.cleanContent, 2000).text,
+      })),
+      controller: new AbortController(),
+      control: undefined,
+      pendingSteering: undefined,
+    };
+    stream.active = active;
+    const humansAtStart = stream.state.humanMessagesSinceLastBot;
+    const unrelatedAtStart = stream.state.unrelatedHumanMessagesSinceLastBot;
+    void this.responder
+      .reply(task, events, stream.workspace, input.discordMessage, {
+        signal: active.controller.signal,
+        onProgress: (text) => {
+          active.textPreview = truncateText(text, 1200).text;
+        },
+        onControlReady: (control) => {
+          if (stream.active !== active || active.controller.signal.aborted) return;
+          active.control = control;
+          if (active.pendingSteering) {
+            control.steer(active.pendingSteering);
+            active.pendingSteering = undefined;
+          }
+        },
+      })
+      .then((messageId) => {
+        if (stream.active !== active || !messageId) return;
+        const newHumans = Math.max(0, stream.state.humanMessagesSinceLastBot - humansAtStart);
+        const newUnrelated = Math.max(0, stream.state.unrelatedHumanMessagesSinceLastBot - unrelatedAtStart);
+        noteBotReply(this.config, stream.state, messageId);
+        stream.state.humanMessagesSinceLastBot = newHumans;
+        stream.state.unrelatedHumanMessagesSinceLastBot = newUnrelated;
+        if (stream.pending.length || stream.deferred.length) stream.state.consecutiveBotReplies = 0;
+      })
+      .catch((error) => {
+        if (!active.controller.signal.aborted)
+          log.error(
+            { err: error, guildId: stream.workspace.guildId, responseId: active.id },
+            "agent reply failed",
+          );
+      })
+      .finally(() => {
+        if (stream.active !== active) return;
+        stream.active = undefined;
+        stream.pending = mergeInputs(stream.deferred, stream.pending);
+        stream.deferred = [];
+        this.schedule(stream);
+      });
+  }
+
+  /** Freeze the event log at decision start, including replies and edits since deferred input arrived. */
+  private async readSnapshot(
+    stream: ConversationStream,
+    batch: ReceivedMessage[],
+  ): Promise<NormalizedDiscordEvent[]> {
+    const all = await new EventLog(stream.workspace.workspaceRoot).readAll();
+    const latest = batch.at(-1);
+    if (!latest) return [];
+    const futureIds = new Set(
+      stream.pending
+        .filter((input) => input.sequence > latest.sequence)
+        .map((input) => input.event.messageId),
+    );
+    const captured = all.filter(
+      (event) => conversationId(event) === conversationId(latest.event) && !futureIds.has(event.messageId),
+    );
+    const existing = new Set(
+      captured
+        .filter(
+          (event) =>
+            event.type === "message_create" ||
+            event.type === "message_update" ||
+            event.type === "message_delete",
+        )
+        .map((event) => event.messageId),
+    );
+    captured.push(
+      ...batch.filter((input) => !existing.has(input.event.messageId)).map((input) => input.event),
+    );
+    const newIds = new Set(batch.map((input) => input.event.messageId));
+    const prior = captured
+      .filter((event) => !newIds.has(event.messageId))
+      .slice(-this.config.conversation.maxRecentMessages);
+    return [...prior, ...captured.filter((event) => newIds.has(event.messageId))];
+  }
+
+  private clearTimer(state: ConversationRuntimeState): void {
     if (state.pendingTimer) clearTimeout(state.pendingTimer);
     delete state.pendingTimer;
-    delete state.pendingFollowUp;
   }
 
   private async maybeAmbientEngage(
@@ -415,76 +558,65 @@ export class ConversationOrchestrator {
     events: NormalizedDiscordEvent[],
     message: NormalizedDiscordMessage,
     previousLastHumanAt?: string,
+    signal?: AbortSignal,
   ) {
-    if (!this.config.conversation.notEngaged.ambientEngagementEnabled) {
-      log.debug({ messageId: message.id }, "ambient engagement disabled");
-      return undefined;
-    }
+    if (!this.config.conversation.notEngaged.ambientEngagementEnabled) return undefined;
     const now = Date.now();
     const lastHumanAt = previousLastHumanAt ? Date.parse(previousLastHumanAt) : 0;
-    if (lastHumanAt && now - lastHumanAt < this.config.conversation.notEngaged.ambientMinSilenceMs) {
-      log.debug({ messageId: message.id }, "ambient engagement skipped by silence window");
+    if (lastHumanAt && now - lastHumanAt < this.config.conversation.notEngaged.ambientMinSilenceMs)
       return undefined;
-    }
-    const lastAmbientDecisionAt = state.lastAmbientDecisionAt ? Date.parse(state.lastAmbientDecisionAt) : 0;
+    const lastDecisionAt = state.lastAmbientDecisionAt ? Date.parse(state.lastAmbientDecisionAt) : 0;
     if (
-      lastAmbientDecisionAt &&
-      now - lastAmbientDecisionAt < this.config.conversation.notEngaged.ambientDecisionCooldownMs
-    ) {
-      log.debug({ messageId: message.id }, "ambient engagement skipped by decision cooldown");
+      lastDecisionAt &&
+      now - lastDecisionAt < this.config.conversation.notEngaged.ambientDecisionCooldownMs
+    )
       return undefined;
-    }
-    state.ambientReplyTimes = state.ambientReplyTimes.filter(
-      (time) => now - Date.parse(time) < 60 * 60 * 1000,
-    );
-    if (state.ambientReplyTimes.length >= this.config.conversation.notEngaged.ambientMaxPerHour) {
-      log.debug({ messageId: message.id }, "ambient engagement skipped by hourly limit");
+    state.ambientReplyTimes = state.ambientReplyTimes.filter((time) => now - Date.parse(time) < 3_600_000);
+    if (state.ambientReplyTimes.length >= this.config.conversation.notEngaged.ambientMaxPerHour)
       return undefined;
-    }
     state.lastAmbientDecisionAt = new Date(now).toISOString();
     const decision = await decideEngagement({
       runner: this.runner,
       agentsPath: this.agentsPath,
       workspaceRoot,
-      state,
+      state: { ...state },
       events,
       currentMessage: message,
       timezone: this.config.runtime.timezone,
       botIdentity: this.botIdentity,
+      ...(signal ? { signal } : {}),
     });
-    if (decision.confidence < this.config.conversation.notEngaged.ambientConfidenceThreshold) {
-      log.debug(
-        { messageId: message.id, confidence: decision.confidence },
-        "ambient engagement below confidence threshold",
-      );
+    if (decision.confidence < this.config.conversation.notEngaged.ambientConfidenceThreshold)
       return undefined;
-    }
     state.ambientReplyTimes.push(new Date().toISOString());
     return decision;
   }
 
-  private async reply(
-    task: EngagementDecision | StayDecision,
-    events: NormalizedDiscordEvent[],
-    workspace: GuildWorkspace,
-    discordMessage?: Message<boolean>,
-  ): Promise<void> {
-    const messageId = await this.responder.reply(task, events, workspace, discordMessage);
-    if (messageId) {
-      const state = this.states.get(conversationId(taskMessageKey(events)));
-      noteBotReply(this.config, state, messageId);
-    }
+  private isStrongTrigger(message: NormalizedDiscordMessage): boolean {
+    return (
+      this.explicitAddress(message) ||
+      isDirectedAtBot(message, this.botIdentity.userId, this.botIdentity.names)
+    );
   }
 
-  private isStrongTrigger(message: NormalizedDiscordMessage): boolean {
-    if (isDirectedAtBot(message, this.botIdentity.userId, this.botIdentity.names)) return true;
-    if (message.replyTo && this.botIdentity.userId && message.replyTo.authorId === this.botIdentity.userId)
-      return true;
-    return /^\/[a-z0-9_-]+/i.test(message.cleanContent.trim());
+  private startMaintenance(workspace: GuildWorkspace): void {
+    if (!this.config.memory.compaction.enabled || this.maintenance.has(workspace.guildId)) return;
+    const pending = this.compact(workspace)
+      .then(async (compacted) => {
+        if (compacted && this.config.memory.dream.runOnCompaction && !this.closed)
+          await this.dreamScheduler.runNow(workspace, "compaction");
+      })
+      .catch((error) => {
+        log.error({ err: error, guildId: workspace.guildId }, "memory maintenance failed");
+      })
+      .finally(() => {
+        this.maintenance.delete(workspace.guildId);
+      });
+    this.maintenance.set(workspace.guildId, pending);
   }
 
   async adminForceCompact(workspace: GuildWorkspace): Promise<HistoryEntry | undefined> {
-    const forcedConfig: AppConfig = {
+    return this.compact(workspace, {
       ...this.config,
       memory: {
         ...this.config.memory,
@@ -494,8 +626,7 @@ export class ConversationOrchestrator {
           minEventsPerSummary: 1,
         },
       },
-    };
-    return this.compact(workspace, forcedConfig);
+    });
   }
 
   private async compact(
@@ -529,42 +660,26 @@ export class ConversationOrchestrator {
   }
 }
 
-function shouldIdleDisengage(config: AppConfig, state: ConversationRuntimeState): boolean {
-  if (
-    state.unrelatedHumanMessagesSinceLastBot >=
-    config.conversation.engaged.disengageAfterUnrelatedHumanMessages
-  ) {
-    return true;
-  }
-  if (!state.lastHumanMessageAt) return false;
-  return (
-    Date.now() - Date.parse(state.lastHumanMessageAt) >= config.conversation.engaged.disengageAfterIdleMs
-  );
-}
-
-function findMessageById(
-  events: NormalizedDiscordEvent[],
-  messageId: string | undefined,
-): NormalizedDiscordMessage | undefined {
-  if (!messageId) return undefined;
-  return events.findLast(
-    (event): event is Extract<NormalizedDiscordEvent, { type: "message_create" | "message_update" }> =>
-      (event.type === "message_create" || event.type === "message_update") && event.messageId === messageId,
-  )?.payload;
-}
-
-function taskMessageKey(events: NormalizedDiscordEvent[]): {
-  guildId: string;
-  channelId: string;
-  threadId?: string;
-} {
-  const latest = events.findLast(
-    (event) => event.type === "message_create" || event.type === "message_update",
-  );
-  if (!latest) return { guildId: "unknown", channelId: "unknown" };
+function snapshotActive(active: ActiveResponse): ActiveResponseSnapshot {
   return {
-    guildId: latest.guildId,
-    channelId: latest.channelId,
-    ...(latest.threadId ? { threadId: latest.threadId } : {}),
+    id: active.id,
+    startedAt: active.startedAt,
+    requesterIds: [...active.requesterIds],
+    targetMessageIds: [...active.targetMessageIds],
+    updatesUsed: active.updatesUsed,
+    textPreview: active.textPreview,
+    requestMessages: active.requestMessages.map((message) => ({ ...message })),
   };
+}
+function mergeInputs(first: ReceivedMessage[], second: ReceivedMessage[]): ReceivedMessage[] {
+  const unique = new Map([...first, ...second].map((input) => [input.sequence, input]));
+  return [...unique.values()].sort((a, b) => a.sequence - b.sequence);
+}
+function shouldIdleDisengage(config: AppConfig, state: ConversationRuntimeState): boolean {
+  return (
+    state.unrelatedHumanMessagesSinceLastBot >=
+      config.conversation.engaged.disengageAfterUnrelatedHumanMessages ||
+    (state.lastHumanMessageAt !== undefined &&
+      Date.now() - Date.parse(state.lastHumanMessageAt) >= config.conversation.engaged.disengageAfterIdleMs)
+  );
 }

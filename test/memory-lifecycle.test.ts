@@ -9,6 +9,17 @@ import type { HistoryEntry, NormalizedDiscordEvent } from "../src/types.js";
 import { createTestWorkspace } from "./helpers/workspace.js";
 
 describe("memory lifecycle", () => {
+  it("allocates distinct ordered cursors for concurrent appends from separate EventLog instances", async () => {
+    const root = await createTestWorkspace("dbh2-stream-log-");
+    const saved = await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        new EventLog(root).append(messageEvent(`m${index}`, "u1", `message ${index}`)),
+      ),
+    );
+    expect(saved.map((event) => event.cursor)).toEqual(Array.from({ length: 12 }, (_, index) => index + 1));
+    expect(await new EventLog(root).readAll()).toHaveLength(12);
+  });
+
   it("uses .cursor as compaction cursor, not event id allocation", async () => {
     const { root, log, config } = await createMemoryFixture();
     await appendConversation(log);

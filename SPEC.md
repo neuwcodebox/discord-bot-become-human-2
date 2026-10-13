@@ -6,6 +6,9 @@
 
 `discord-bot-become-human-2`는 Node.js/TypeScript 기반 Discord 그룹 채팅 AI Agent 봇이다.
 
+Node.js 지원 범위는 최신 빌드 도구의 요구사항에 맞춘 `^24.11.0 || >=26.0.0`이다. Node 타입은
+최소 지원 런타임과 같은 24 계열의 최신 버전을 사용한다.
+
 목표는 명령어형 봇이 아니라, Discord 서버의 다자간 대화 흐름을 보고 있다가 필요한 순간에 자연스럽게 참여하는 대화형 에이전트다. 봇은 사람이 Discord에서 보는 것과 최대한 비슷한 방식으로 대화 이력, 답장, 첨부파일, 이모지 반응, 메시지 수정/삭제, 사용자 구분을 인식해야 한다.
 
 핵심 구성은 다음과 같다.
@@ -1788,7 +1791,7 @@ authPath: ~/.discord-bot-become-human-2/codex-auth.json
 
 Codex auth는 `@earendil-works/pi-ai/providers/openai-codex`의 provider OAuth API를 사용한다. `codex-auth.json`은 agent context, file tool, bwrap sandbox에 노출하지 않는다.
 
-pi-ai와 pi-agent-core는 `^1.0.0`을 사용한다. 설치된 pi 모델 카탈로그에 등록된 `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`는 `llm.model`로 선택할 수 있다. 기존 config의 모델 값과 기본 모델 `gpt-5.5`는 자동 변경하지 않는다.
+pi-ai와 pi-agent-core는 `^1.2.0`을 사용한다. 설치된 pi 모델 카탈로그에 등록된 `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`는 `llm.model`로 선택할 수 있다. 기존 config의 모델 값과 기본 모델 `gpt-5.5`는 자동 변경하지 않는다.
 
 모델 카탈로그는 설치된 pi 의존성에서 읽는다. 업데이트 배포 시 서버에서 `npm ci`, `npm run build`를 실행한 뒤 봇을 재시작한다. 카탈로그에 없는 모델을 지정하면 API 요청 전에 오류를 내며, 오류에는 설치된 카탈로그의 모델 ID 목록과 의존성 재설치·빌드·재시작 안내를 포함한다.
 
@@ -1859,6 +1862,24 @@ Dream은 별도 sessionId를 사용한다.
 ```txt
 sessionId = dream:<guild_id>
 ```
+
+---
+
+### 21.3 관측성
+
+`observability.langfuse`가 설정되고 지정된 public/secret key 환경변수가 모두 있을 때만 Langfuse
+JS/TS SDK v5와 OpenTelemetry를 초기화한다. 키가 없으면 관측성은 비활성화한다.
+
+- `@langfuse/tracing`의 `startObservation`으로 실행별 root `agent` observation을 만든다.
+- LLM 호출은 `generation`, 도구 실행은 `tool`, 도구 진행 이벤트는 해당 도구의 자식 `event`다.
+- 비동기 pi 이벤트마다 부모 span context를 명시하고 `propagateAttributes`로 실행 이름과 sessionId를
+  각 observation에 전파한다. 서로 다른 실행의 observation이 섞이지 않아야 한다.
+- 입력/최종 출력은 root observation에 기록한다. deprecated trace I/O 설정 API를 사용하지 않는다.
+- generation은 `usageDetails`와 `costDetails`를 기록한다. 기존 도구 오류·호출 횟수·성공률 등의
+  평가 점수는 `@langfuse/client`의 `score.create`로 동일 trace/observation ID에 연결한다.
+- `@langfuse/otel`의 `LangfuseSpanProcessor`를 `NodeSDK`에 등록하고 5초 간격으로 export한다.
+  SIGINT/SIGTERM 종료 시 NodeSDK와 Langfuse client를 모두 shutdown해 대기 데이터를 flush한다.
+- 완료 또는 중단된 실행은 남은 자식 observation과 root를 한 번만 종료한다.
 
 ---
 

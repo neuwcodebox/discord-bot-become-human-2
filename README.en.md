@@ -7,7 +7,7 @@ Each server gets an isolated workspace that keeps the bot's identity, long-term 
 
 ## Requirements
 
-- Node.js 24+
+- Node.js 24.11+ (24.x) or 26+
 - A Discord bot account (create one at the Developer Portal)
 - OpenAI Codex account — or any OpenAI-compatible endpoint (OpenAI, OpenRouter, local models, etc.)
 - bubblewrap (`bwrap`) — required for sandboxed code execution, Linux only (only needed when `sandbox.enabled: true`)

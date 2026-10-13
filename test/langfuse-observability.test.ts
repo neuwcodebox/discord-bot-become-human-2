@@ -21,7 +21,7 @@ class FakeSpan implements LangfuseSpan {
 
   constructor(
     readonly id: string,
-    readonly body: Parameters<LangfuseTrace["span"]>[0],
+    readonly body: Parameters<LangfuseTrace["startTool"]>[0],
   ) {}
 
   event(body: LangfuseEventBody): unknown {
@@ -40,7 +40,7 @@ class FakeGeneration implements LangfuseGeneration {
 
   constructor(
     readonly id: string,
-    readonly body: Parameters<LangfuseTrace["generation"]>[0],
+    readonly body: Parameters<LangfuseTrace["startGeneration"]>[0],
   ) {}
 
   end(body?: LangfuseGenerationEndBody): unknown {
@@ -53,10 +53,11 @@ class FakeTrace implements LangfuseTrace {
   readonly spans: FakeSpan[] = [];
   readonly generations: FakeGeneration[] = [];
   updates: Array<Parameters<LangfuseTrace["update"]>[0]> = [];
+  endCount = 0;
 
   constructor(
     readonly id: string,
-    readonly body: Parameters<LangfuseAgentClient["trace"]>[0],
+    readonly body: Parameters<LangfuseAgentClient["startRun"]>[0],
   ) {}
 
   update(body?: Parameters<LangfuseTrace["update"]>[0]): unknown {
@@ -64,13 +65,17 @@ class FakeTrace implements LangfuseTrace {
     return this;
   }
 
-  span(body: Parameters<LangfuseTrace["span"]>[0]): LangfuseSpan {
+  end(): void {
+    this.endCount += 1;
+  }
+
+  startTool(body: Parameters<LangfuseTrace["startTool"]>[0]): LangfuseSpan {
     const span = new FakeSpan(`span-${this.spans.length + 1}`, body);
     this.spans.push(span);
     return span;
   }
 
-  generation(body: Parameters<LangfuseTrace["generation"]>[0]): LangfuseGeneration {
+  startGeneration(body: Parameters<LangfuseTrace["startGeneration"]>[0]): LangfuseGeneration {
     const generation = new FakeGeneration(`generation-${this.generations.length + 1}`, body);
     this.generations.push(generation);
     return generation;
@@ -81,13 +86,13 @@ class FakeLangfuse implements LangfuseAgentClient {
   readonly traces: FakeTrace[] = [];
   readonly scores: LangfuseScoreBody[] = [];
 
-  trace(body?: Parameters<LangfuseAgentClient["trace"]>[0]): LangfuseTrace {
+  startRun(body: Parameters<LangfuseAgentClient["startRun"]>[0]): LangfuseTrace {
     const trace = new FakeTrace(`trace-${this.traces.length + 1}`, body);
     this.traces.push(trace);
     return trace;
   }
 
-  score(body: LangfuseScoreBody): unknown {
+  createScore(body: LangfuseScoreBody): unknown {
     this.scores.push(body);
     return this;
   }
@@ -216,7 +221,7 @@ describe("langfuse observability", () => {
     const span = trace?.spans[0];
     expect(generation?.ended).toMatchObject({
       output: longOutput,
-      usage: { input: 10, output: 4, total: 14 },
+      usageDetails: { input: 10, output: 4, total: 14 },
       costDetails: { input: 0.01, output: 0.02, total: 0.03 },
     });
     expect(String(generation?.ended?.output)).not.toContain("(truncated)");
@@ -299,6 +304,27 @@ describe("langfuse observability", () => {
       }),
     ]);
     expect(generationInput).not.toBe("initial task");
+  });
+
+  it("ends unfinished observations and the root exactly once", async () => {
+    const langfuse = new FakeLangfuse();
+    const observer = createLangfuseAgentObserver({
+      langfuse,
+      sessionId: "interrupted-run",
+      model: "gpt-test",
+      provider: "openai",
+      inputMessages: [],
+      startedAt: 1000,
+    });
+    await observer.handleEvent({ type: "message_start", message: assistantMessage([]) });
+    await observer.handleEvent(toolStart("call-1", "workspace_read", {}));
+    await observer.handleEvent({ type: "agent_end", messages: [] });
+    observer.finish("", []);
+
+    const trace = langfuse.traces[0];
+    expect(trace?.generations[0]?.ended?.metadata).toMatchObject({ incomplete: true });
+    expect(trace?.spans[0]?.ended?.metadata).toMatchObject({ incomplete: true });
+    expect(trace?.endCount).toBe(1);
   });
 });
 

@@ -25,26 +25,25 @@ describe("Codex model selection", () => {
     );
   });
 
-  it.each([
-    "gpt-6-sol",
-    "gpt-6-luna",
-    "gpt-6.1-sol",
-  ])("accepts %s from the installed pi catalog", async (model) => {
-    const runner = new PiCodexAgentRunner({
-      ...defaultConfig,
-      llm: {
-        provider: "openai-codex",
-        model,
-        reasoning: "medium",
-        codex: {
-          authPath: join(tmpdir(), `dbh2-missing-auth-${randomUUID()}.json`),
-          transport: "auto",
+  it.each(["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"])(
+    "accepts %s from the installed pi catalog",
+    async (model) => {
+      const runner = new PiCodexAgentRunner({
+        ...defaultConfig,
+        llm: {
+          provider: "openai-codex",
+          model,
+          reasoning: "medium",
+          codex: {
+            authPath: join(tmpdir(), `dbh2-missing-auth-${randomUUID()}.json`),
+            transport: "auto",
+          },
         },
-      },
-    });
+      });
 
-    await expect(runner.run({ sessionId: "model-selection", messages: [] })).rejects.toThrow(
-      "Codex auth is not available",
-    );
-  });
+      await expect(runner.run({ sessionId: "model-selection", messages: [] })).rejects.toThrow(
+        "Codex auth is not available",
+      );
+    },
+  );
 });

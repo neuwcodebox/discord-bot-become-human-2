@@ -28,7 +28,7 @@ export type LangfuseSpanEndBody = {
 export type LangfuseGenerationEndBody = {
   output?: unknown;
   metadata?: Record<string, unknown>;
-  usage?: Record<string, number>;
+  usageDetails?: Record<string, number>;
   costDetails?: Record<string, number>;
 };
 
@@ -46,26 +46,27 @@ export type LangfuseGeneration = {
 export type LangfuseTrace = {
   id: string;
   update(body?: { input?: unknown; output?: unknown; metadata?: Record<string, unknown> }): unknown;
-  span(body: {
+  end(): void;
+  startTool(body: {
     name: string;
     startTime?: Date;
     input?: unknown;
     metadata?: Record<string, unknown>;
   }): LangfuseSpan;
-  generation(body: {
+  startGeneration(body: {
     name: string;
     startTime?: Date;
     input?: unknown;
     output?: unknown;
     metadata?: Record<string, unknown>;
     model?: string;
-    usage?: Record<string, number>;
+    usageDetails?: Record<string, number>;
     costDetails?: Record<string, number>;
   }): LangfuseGeneration;
 };
 
 export type LangfuseAgentClient = {
-  trace(body?: {
+  startRun(body: {
     name?: string;
     timestamp?: Date;
     sessionId?: string;
@@ -73,7 +74,7 @@ export type LangfuseAgentClient = {
     output?: unknown;
     metadata?: Record<string, unknown>;
   }): LangfuseTrace;
-  score(body: LangfuseScoreBody): unknown;
+  createScore(body: LangfuseScoreBody): unknown;
 };
 
 export type LangfuseAgentObserverOptions = {
@@ -121,7 +122,7 @@ type AssistantGenerationOutput =
 export function createLangfuseAgentObserver(options: LangfuseAgentObserverOptions): LangfuseAgentObserver {
   const inputMessages = summarizeInputMessages(options.inputMessages);
   const initialGenerationInput = generationInputFromContextMessages(inputMessages);
-  const trace = options.langfuse.trace({
+  const trace = options.langfuse.startRun({
     name: options.traceLabel ?? "agent-run",
     timestamp: new Date(options.startedAt),
     sessionId: options.sessionId,
@@ -150,7 +151,7 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
     if (event.message.role !== "assistant") return;
     const order = nextOrder();
     activeGeneration = {
-      generation: trace.generation({
+      generation: trace.startGeneration({
         name: "llm-response",
         startTime: new Date(),
         input: currentGenerationInput(),
@@ -194,7 +195,7 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
         toolCallCount: toolCalls.length,
         toolCallNames: toolCalls.map((part) => part.name),
       },
-      usage,
+      usageDetails: usage,
     };
     if (costDetails) endBody.costDetails = costDetails;
     generation.generation.end(endBody);
@@ -204,7 +205,7 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
   function handleToolStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {
     const order = nextOrder();
     toolCallCount += 1;
-    const span = trace.span({
+    const span = trace.startTool({
       name: `tool:${event.toolName}`,
       startTime: new Date(),
       input: safeSerialize(event.args),
@@ -298,6 +299,12 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
       });
     }
     activeToolSpans.clear();
+    if (activeGeneration) {
+      activeGeneration.generation.end({
+        metadata: { incomplete: true, endOrder: nextOrder() },
+      });
+      activeGeneration = null;
+    }
 
     const toolActivity = summarizeAgentToolActivity(messages);
     const scores = computeEvaluationScores(toolCallCount, errorCount, turnCount);
@@ -312,6 +319,7 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
         ...scores,
       },
     });
+    trace.end();
     safeScore(options.langfuse, {
       name: "tool_call_count",
       value: scores.tool_call_count,
@@ -587,7 +595,7 @@ function redactingReplacer(key: string, value: unknown): unknown {
 
 function safeScore(langfuse: LangfuseAgentClient, body: LangfuseScoreBody): void {
   try {
-    langfuse.score(body);
+    langfuse.createScore(body);
   } catch {
     // Observability must never change agent behavior.
   }

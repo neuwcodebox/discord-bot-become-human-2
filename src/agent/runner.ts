@@ -9,11 +9,14 @@ import { hasApi } from "@earendil-works/pi-ai";
 import { streamSimple as streamOpenAICodex } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import type { Langfuse } from "langfuse";
 import type { CodexLlmConfig, OpenAICompatLlmConfig } from "../config.js";
 import { normalizeContextMessages, truncateText } from "../context/limits.js";
 import { childLogger } from "../logger.js";
-import { createLangfuseAgentObserver, summarizeAgentToolActivity } from "../observability/langfuse.js";
+import {
+  createLangfuseAgentObserver,
+  type LangfuseAgentClient,
+  summarizeAgentToolActivity,
+} from "../observability/langfuse.js";
 import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
 import { loadCodexCredentials } from "./provider.js";
 
@@ -39,7 +42,7 @@ export interface AgentRunner {
 export class PiCodexAgentRunner implements AgentRunner {
   constructor(
     private readonly config: CodexAppConfig,
-    private readonly langfuse?: Langfuse | null,
+    private readonly langfuse?: LangfuseAgentClient | null,
   ) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
@@ -68,7 +71,7 @@ export class PiCodexAgentRunner implements AgentRunner {
 export class OpenAICompatibleAgentRunner implements AgentRunner {
   constructor(
     private readonly config: OpenAICompatAppConfig,
-    private readonly langfuse?: Langfuse | null,
+    private readonly langfuse?: LangfuseAgentClient | null,
   ) {}
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
@@ -109,7 +112,7 @@ type RunAgentOptions = {
   streamFn: StreamFn;
   messages: ReturnType<typeof normalizeContextMessages>;
   startedAt: number;
-  langfuse: Langfuse | null;
+  langfuse: LangfuseAgentClient | null;
 };
 
 async function runAgent(

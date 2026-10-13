@@ -9,7 +9,7 @@ Discord 그룹 채팅의 전체 맥락을 사람처럼 읽고 필요한 순간�
 
 ## 요구사항
 
-- Node.js 24 이상
+- Node.js 24.11 이상(24 계열) 또는 26 이상
 - Discord 봇 계정 (Developer Portal에서 생성)
 - OpenAI Codex 계정 — 또는 OpenAI API 호환 엔드포인트 (OpenAI, OpenRouter, 로컬 모델 등)
 - bubblewrap (`bwrap`) — 코드 샌드박스 실행용, Linux 필요 (`sandbox.enabled: true`일 때만 요구됨)

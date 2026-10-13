@@ -1,60 +1,45 @@
 import { describe, expect, it } from "vitest";
 import { buildTranscript } from "../src/conversation/transcript-builder.js";
 import type { NormalizedDiscordEvent } from "../src/types.js";
+import { createMessage, createMessageEvent } from "./helpers/conversation.js";
 
 describe("transcript builder", () => {
   it("keeps reply, attachment, embed, reaction, edit, and delete data inside message blocks", () => {
     const events: NormalizedDiscordEvent[] = [
-      {
-        type: "message_create",
-        time: "2026-05-10T12:00:00.000Z",
-        guildId: "g",
-        channelId: "c",
-        messageId: "m1",
-        authorId: "u1",
-        payload: message("m1", "u1", "neuw", "hello"),
-      },
-      {
-        type: "message_create",
-        time: "2026-05-10T12:01:00.000Z",
-        guildId: "g",
-        channelId: "c",
-        messageId: "m2",
-        authorId: "u2",
-        payload: {
-          ...message("m2", "u2", "min", "see file"),
-          replyTo: {
-            messageId: "m1",
-            authorId: "u1",
-            authorDisplayName: "neuw",
-            contentPreview: "hello",
-            attachments: [
-              {
-                id: "ra1",
-                url: "https://cdn.example/r.png",
-                filename: "r.png",
-                mimeType: "image/png",
-                size: 2,
-                kind: "image" as const,
-              },
-            ],
-            embeds: [{ title: "reply-embed", description: "reply-desc" }],
-          },
+      createMessageEvent(message("m1", "u1", "neuw", "hello")),
+      createMessageEvent({
+        ...message("m2", "u2", "min", "see file"),
+        replyTo: {
+          messageId: "m1",
+          authorId: "u1",
+          authorDisplayName: "neuw",
+          contentPreview: "hello",
           attachments: [
             {
-              id: "a1",
-              url: "https://cdn.example/a.png",
-              filename: "a.png",
+              id: "ra1",
+              url: "https://cdn.example/r.png",
+              filename: "r.png",
               mimeType: "image/png",
-              size: 1,
+              size: 2,
               kind: "image",
             },
           ],
-          embeds: [{ title: "title", description: "desc", url: "https://example.com" }],
-          reactions: [{ emoji: "👍", count: 1, me: false }],
-          editedAt: "2026-05-10T12:02:00.000Z",
+          embeds: [{ title: "reply-embed", description: "reply-desc" }],
         },
-      },
+        attachments: [
+          {
+            id: "a1",
+            url: "https://cdn.example/a.png",
+            filename: "a.png",
+            mimeType: "image/png",
+            size: 1,
+            kind: "image",
+          },
+        ],
+        embeds: [{ title: "title", description: "desc", url: "https://example.com" }],
+        reactions: [{ emoji: "👍", count: 1, me: false }],
+        editedAt: "2026-05-10T12:02:00.000Z",
+      }),
       {
         type: "message_delete",
         time: "2026-05-10T12:03:00.000Z",
@@ -63,24 +48,8 @@ describe("transcript builder", () => {
         messageId: "m2",
         payload: { deletedAt: "2026-05-10T12:03:00.000Z" },
       },
-      {
-        type: "message_create",
-        time: "2026-05-10T12:04:00.000Z",
-        guildId: "g",
-        channelId: "c",
-        messageId: "m3",
-        authorId: "bot-self",
-        payload: message("m3", "bot-self", "Self Bot", "my reply", true),
-      },
-      {
-        type: "message_create",
-        time: "2026-05-10T12:05:00.000Z",
-        guildId: "g",
-        channelId: "c",
-        messageId: "m4",
-        authorId: "bot-other",
-        payload: message("m4", "bot-other", "Other Bot", "other reply", true),
-      },
+      createMessageEvent(message("m3", "bot-self", "Self Bot", "my reply", true)),
+      createMessageEvent(message("m4", "bot-other", "Other Bot", "other reply", true)),
     ];
 
     const transcript = buildTranscript(events, {
@@ -93,10 +62,10 @@ describe("transcript builder", () => {
 
     expect(transcript).toContain('<msg id="m2" author="min"');
     expect(transcript).toContain('edited="2026-05-10T12:02:00.000+00:00"');
-    expect(transcript).toContain("deleted target");
+    expect(transcript).toMatch(/<msg\b[^>]*\bdeleted\b/);
+    expect(transcript).toMatch(/<msg\b[^>]*\btarget\b/);
     expect(transcript).toContain("<reply");
-    // reply itself has attachments and embeds
-    const replyBlock = transcript.slice(transcript.indexOf("<reply"), transcript.indexOf("</reply>") + 8);
+    const replyBlock = transcript.match(/<reply\b[\s\S]*?<\/reply>/)?.[0] ?? "";
     expect(replyBlock).not.toContain("uid=");
     expect(replyBlock).toContain("ra1");
     expect(replyBlock).toContain("reply-embed");
@@ -104,25 +73,19 @@ describe("transcript builder", () => {
     expect(transcript).toContain("<embeds>");
     expect(transcript).toContain("<rxs>");
     expect(transcript).toContain("<deleted");
-    expect(transcript).toContain('<msg id="m3" author="Self Bot" t="2026-05-10T12:00:00.000+00:00" me>');
-    expect(transcript).toContain('<msg id="m4" author="Other Bot" t="2026-05-10T12:00:00.000+00:00" bot>');
+    expect(transcript).toMatch(/<msg\b[^>]*id="m3"[^>]*\bme>/);
+    expect(transcript).toMatch(/<msg\b[^>]*id="m4"[^>]*\bbot>/);
     expect(transcript).not.toContain(" other");
   });
 });
 
 function message(id: string, userId: string, name: string, content: string, isBot = false) {
-  return {
-    id,
+  return createMessage(id, {
     guildId: "g",
     channelId: "c",
     author: { id: userId, username: name, displayName: name, isBot },
     content,
     cleanContent: content,
     createdAt: "2026-05-10T12:00:00.000Z",
-    mentions: [],
-    attachments: [],
-    embeds: [],
-    reactions: [],
-    links: [],
-  };
+  });
 }

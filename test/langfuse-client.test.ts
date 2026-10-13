@@ -3,7 +3,7 @@ import { LangfuseSpanProcessor } from "@langfuse/otel";
 import { LangfuseOtelSpanAttributes, setLangfuseTracerProvider } from "@langfuse/tracing";
 import { context, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter, NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLangfuseAgentClient } from "../src/observability/langfuse-client.js";
 
 describe("Langfuse v5 SDK integration", () => {
@@ -18,6 +18,10 @@ describe("Langfuse v5 SDK integration", () => {
   provider.register();
   setLangfuseTracerProvider(provider);
   const client = new LangfuseClient({ publicKey: "pk-test", secretKey: "sk-test" });
+
+  beforeEach(() => {
+    exporter.reset();
+  });
 
   afterAll(async () => {
     await Promise.all([provider.shutdown(), client.shutdown()]);
@@ -56,30 +60,35 @@ describe("Langfuse v5 SDK integration", () => {
     await provider.forceFlush();
 
     const spans = exporter.getFinishedSpans();
-    const root = spans.find((span) => span.name === "response");
-    const llm = spans.find((span) => span.name === "llm-response");
-    const toolSpan = spans.find((span) => span.name === "tool:workspace_read");
-    const update = spans.find((span) => span.name === "tool_update");
+    const root = spanNamed(spans, "response");
+    const llm = spanNamed(spans, "llm-response");
+    const toolSpan = spanNamed(spans, "tool:workspace_read");
+    const update = spanNamed(spans, "tool_update");
     expect(spans).toHaveLength(4);
-    expect(root?.attributes[LangfuseOtelSpanAttributes.OBSERVATION_TYPE]).toBe("agent");
-    expect(toolSpan?.attributes[LangfuseOtelSpanAttributes.OBSERVATION_TYPE]).toBe("tool");
-    expect(llm?.parentSpanContext?.spanId).toBe(root?.spanContext().spanId);
-    expect(toolSpan?.parentSpanContext?.spanId).toBe(root?.spanContext().spanId);
-    expect(update?.parentSpanContext?.spanId).toBe(tool.id);
-    expect(llm?.startTime).toEqual([2, 0]);
-    expect(toolSpan?.startTime).toEqual([3, 0]);
+    expect(root.attributes[LangfuseOtelSpanAttributes.OBSERVATION_TYPE]).toBe("agent");
+    expect(toolSpan.attributes[LangfuseOtelSpanAttributes.OBSERVATION_TYPE]).toBe("tool");
+    expect(llm.parentSpanContext?.spanId).toBe(root.spanContext().spanId);
+    expect(toolSpan.parentSpanContext?.spanId).toBe(root.spanContext().spanId);
+    expect(tool.id).toBe(toolSpan.spanContext().spanId);
+    expect(update.parentSpanContext?.spanId).toBe(toolSpan.spanContext().spanId);
+    expect(llm.startTime).toEqual([2, 0]);
+    expect(toolSpan.startTime).toEqual([3, 0]);
     for (const span of spans) {
       expect(span.spanContext().traceId).toBe(run.id);
       expect(span.attributes[LangfuseOtelSpanAttributes.TRACE_SESSION_ID]).toBe("discord:guild:channel");
       expect(span.attributes[LangfuseOtelSpanAttributes.TRACE_NAME]).toBe("response");
     }
-    expect(root?.attributes[LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT]).toBe("done");
-    expect(llm?.attributes[LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS]).toBe(
-      JSON.stringify({ input: 10, output: 4, total: 14 }),
-    );
-    expect(llm?.attributes[LangfuseOtelSpanAttributes.OBSERVATION_COST_DETAILS]).toBe(
-      JSON.stringify({ input: 0.01, output: 0.02, total: 0.03 }),
-    );
+    expect(root.attributes[LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT]).toBe("done");
+    expect(parseJson(llm.attributes[LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS])).toEqual({
+      input: 10,
+      output: 4,
+      total: 14,
+    });
+    expect(parseJson(llm.attributes[LangfuseOtelSpanAttributes.OBSERVATION_COST_DETAILS])).toEqual({
+      input: 0.01,
+      output: 0.02,
+      total: 0.03,
+    });
     expect(score).toHaveBeenCalledWith({
       name: "tool_is_error",
       value: 1,
@@ -90,7 +99,6 @@ describe("Langfuse v5 SDK integration", () => {
   });
 
   it("keeps overlapping runs in separate traces and sessions", async () => {
-    exporter.reset();
     const agentClient = createLangfuseAgentClient(client);
     const first = agentClient.startRun({ name: "first", sessionId: "session-1" });
     const second = agentClient.startRun({ name: "second", sessionId: "session-2" });
@@ -104,8 +112,14 @@ describe("Langfuse v5 SDK integration", () => {
     await provider.forceFlush();
 
     expect(first.id).not.toBe(second.id);
-    expect(exporter.getFinishedSpans()).toHaveLength(4);
-    for (const span of exporter.getFinishedSpans()) {
+    const spans = exporter.getFinishedSpans();
+    expect(spans.map((span) => span.name).sort()).toEqual([
+      "first",
+      "first-generation",
+      "second",
+      "second-generation",
+    ]);
+    for (const span of spans) {
       const isFirst = span.name.startsWith("first");
       expect(span.spanContext().traceId).toBe(isFirst ? first.id : second.id);
       expect(span.attributes[LangfuseOtelSpanAttributes.TRACE_SESSION_ID]).toBe(
@@ -114,3 +128,14 @@ describe("Langfuse v5 SDK integration", () => {
     }
   });
 });
+
+function spanNamed(spans: ReturnType<InMemorySpanExporter["getFinishedSpans"]>, name: string) {
+  const span = spans.find((entry) => entry.name === name);
+  if (!span) throw new Error(`Expected exported span ${name}`);
+  return span;
+}
+
+function parseJson(value: unknown): unknown {
+  if (typeof value !== "string") throw new Error("Expected a serialized JSON attribute");
+  return JSON.parse(value);
+}

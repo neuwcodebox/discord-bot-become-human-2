@@ -1,109 +1,121 @@
-import { Collection, type Message, type MessageMentionOptions, type TextBasedChannel } from "discord.js";
-import { describe, expect, it, vi } from "vitest";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import { createDiscordActionRuntimeFromMessage } from "../src/tools/discord-actions.js";
+import { createDiscordFixture } from "./helpers/discord.js";
+import { createTestWorkspace } from "./helpers/workspace.js";
 
-type SendPayload = { content: string; allowedMentions: MessageMentionOptions };
-type FetchOptions = { after: string; limit: number };
+const allowedMentions = { parse: [], repliedUser: false };
 
-function createFixture(id = "source-message") {
-  const sentMessage = (msgId: string) => ({ id: msgId }) as unknown as Message<boolean>;
-  let sendCount = 0;
-  const fetch = vi.fn(
-    async (_opts: FetchOptions): Promise<Collection<string, Message<boolean>>> => new Collection(),
+async function actionFixture({
+  newerMessageCount = 2,
+  sendState = { firstReplySent: false },
+  workspaceRoot = "/unused",
+  limits = { softLimitChars: 1800, hardLimitChars: 1950 },
+} = {}) {
+  const fixture = await createDiscordFixture({ newerMessageCount });
+  const runtime = createDiscordActionRuntimeFromMessage(
+    fixture.message,
+    { guildId: "g", workspaceRoot },
+    sendState,
+    limits,
   );
-  const send = vi.fn(
-    async (_opts: SendPayload): Promise<Message<boolean>> => sentMessage(`sent-${++sendCount}`),
-  );
-  const reply = vi.fn(async (_opts: SendPayload): Promise<Message<boolean>> => sentMessage("replied"));
-  const channel = { send, messages: { fetch } } as unknown as TextBasedChannel;
-  const message = { id, channel, reply } as unknown as Message<boolean>;
-  return { message, channel, send, reply, fetch };
+  return { ...fixture, runtime };
 }
 
-describe("DiscordActionRuntime.sendMessage", () => {
-  it("passes replyTo on the first call when firstReplySent is false", async () => {
-    const { message, fetch } = createFixture();
-    const runtime = createDiscordActionRuntimeFromMessage(message, { guildId: "g", workspaceRoot: "/w" });
+describe("Discord actions", () => {
+  it("replies to the source once and sends subsequent messages normally", async () => {
+    const fixture = await actionFixture();
 
-    await runtime.sendMessage("hello");
+    await fixture.runtime.sendMessage("first");
+    await fixture.runtime.sendMessage("second");
 
-    expect(fetch).toHaveBeenCalledWith({ after: "source-message", limit: 2 });
+    expect(fixture.reply).toHaveBeenCalledWith({ content: "first", allowedMentions });
+    expect(fixture.send).toHaveBeenCalledWith({ content: "second", allowedMentions });
+    expect(fixture.sentMessages.map((message) => message.content)).toEqual(["first", "second"]);
   });
 
-  it("does not pass replyTo on the second call", async () => {
-    const { message, fetch } = createFixture();
-    const runtime = createDiscordActionRuntimeFromMessage(message, { guildId: "g", workspaceRoot: "/w" });
+  it("sends normally when an earlier response already used the reply", async () => {
+    const fixture = await actionFixture({ sendState: { firstReplySent: true } });
 
-    await runtime.sendMessage("first");
-    fetch.mockClear();
-    await runtime.sendMessage("second");
+    const result = await fixture.runtime.sendMessage("hello");
 
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fixture.reply).not.toHaveBeenCalled();
+    expect(fixture.send).toHaveBeenCalledWith({ content: "hello", allowedMentions });
+    expect(result.messageId).toBe(fixture.sentMessages.map((message) => message.id).at(-1));
   });
 
-  it("does not pass replyTo when firstReplySent is already true", async () => {
-    const { message, fetch } = createFixture();
-    const sendState = { firstReplySent: true };
-    const runtime = createDiscordActionRuntimeFromMessage(
-      message,
-      { guildId: "g", workspaceRoot: "/w" },
-      sendState,
+  it("keeps split content within the message limit and returns the last message ID", async () => {
+    const fixture = await actionFixture({ limits: { softLimitChars: 10, hardLimitChars: 12 } });
+
+    const result = await fixture.runtime.sendMessage("one two three four");
+    const chunks = fixture.sentMessages.map((message) => message.content);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 12)).toBe(true);
+    expect(chunks.join(" ")).toBe("one two three four");
+    expect(fixture.reply).toHaveBeenCalledTimes(1);
+    expect(result.messageId).toBe(fixture.sentMessages.map((message) => message.id).at(-1));
+  });
+
+  it("sends a workspace file without requiring text", async () => {
+    const workspaceRoot = await createTestWorkspace();
+    const contents = Buffer.from("attachment contents");
+    await writeFile(join(workspaceRoot, "note.txt"), contents);
+    const fixture = await actionFixture({ workspaceRoot, sendState: { firstReplySent: true } });
+
+    const result = await fixture.runtime.sendMessage(undefined, ["note.txt"]);
+
+    expect(fixture.send).toHaveBeenCalledWith({
+      content: "",
+      files: [expect.objectContaining({ name: "note.txt", attachment: contents })],
+      allowedMentions,
+    });
+    expect(result.messageId).toBe(fixture.sentMessages.map((message) => message.id).at(-1));
+  });
+
+  it("rejects attachment paths outside the current workspace", async () => {
+    const workspaceRoot = await createTestWorkspace();
+    const outsideRoot = await createTestWorkspace();
+    const outsideFile = join(outsideRoot, "private.txt");
+    await writeFile(outsideFile, "private contents");
+    const fixture = await actionFixture({ workspaceRoot });
+
+    await expect(fixture.runtime.sendMessage(undefined, [outsideFile])).rejects.toThrow(
+      /escapes guild workspace/,
     );
-
-    await runtime.sendMessage("hello");
-
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fixture.sentMessages).toEqual([]);
   });
 
-  it("returns the messageId of the sent message", async () => {
-    const { message } = createFixture();
-    const sendState = { firstReplySent: true };
-    const runtime = createDiscordActionRuntimeFromMessage(
-      message,
-      { guildId: "g", workspaceRoot: "/w" },
-      sendState,
-    );
+  it("rejects a message with neither text nor files", async () => {
+    const fixture = await actionFixture();
 
-    const result = await runtime.sendMessage("hello");
-
-    expect(result).toHaveProperty("messageId");
-    expect(typeof result.messageId).toBe("string");
-    expect(result.messageId.length).toBeGreaterThan(0);
+    await expect(fixture.runtime.sendMessage(undefined, [])).rejects.toThrow(/content or files/);
+    expect(fixture.sentMessages).toEqual([]);
   });
 
-  it("sends multiple chunks for content exceeding hardLimit", async () => {
-    const { message, send } = createFixture();
-    const sendState = { firstReplySent: true };
-    const limits = { softLimitChars: 10, hardLimitChars: 12 };
-    const runtime = createDiscordActionRuntimeFromMessage(
-      message,
-      { guildId: "g", workspaceRoot: "/w" },
-      sendState,
-      limits,
-    );
+  it("allows editing and deleting bot-owned messages", async () => {
+    const fixture = await actionFixture();
+    const owned = await fixture.createMessage({ authorId: fixture.client.user.id, content: "before" });
 
-    await runtime.sendMessage("one two three four");
+    await fixture.runtime.editOwn(owned.id, "after");
+    await fixture.runtime.deleteOwn(owned.id);
 
-    expect(send.mock.calls.length).toBeGreaterThan(1);
-    for (const [payload] of send.mock.calls as [SendPayload][]) {
-      expect(payload.content.length).toBeLessThanOrEqual(12);
-    }
+    expect(owned.content).toBe("after");
+    expect(owned.edit).toHaveBeenCalledWith({ content: "after", allowedMentions });
+    expect(owned.delete).toHaveBeenCalledOnce();
   });
 
-  it("returns the last chunk's messageId when content is split", async () => {
-    const { message, send } = createFixture();
-    const sendState = { firstReplySent: true };
-    const limits = { softLimitChars: 10, hardLimitChars: 12 };
-    const runtime = createDiscordActionRuntimeFromMessage(
-      message,
-      { guildId: "g", workspaceRoot: "/w" },
-      sendState,
-      limits,
-    );
+  it.each(["editOwn", "deleteOwn"] as const)("rejects %s for another user's message", async (action) => {
+    const fixture = await actionFixture();
+    const attempt =
+      action === "editOwn"
+        ? fixture.runtime.editOwn(fixture.message.id, "changed")
+        : fixture.runtime.deleteOwn(fixture.message.id);
 
-    const result = await runtime.sendMessage("one two three four");
-    const lastCallResult = await (send.mock.results.at(-1)?.value as Promise<Message<boolean>>);
-
-    expect(result.messageId).toBe(lastCallResult.id);
+    await expect(attempt).rejects.toThrow(/only bot-owned messages/);
+    expect(fixture.message.content).toBe("source message");
+    expect(fixture.message.edit).not.toHaveBeenCalled();
+    expect(fixture.message.delete).not.toHaveBeenCalled();
   });
 });

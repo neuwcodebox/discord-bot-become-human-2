@@ -1,27 +1,20 @@
-import type { Message, TextBasedChannel } from "discord.js";
-import { buildReactionContext, buildResponseContext } from "../agent/context-builder.js";
+import type { Message } from "discord.js";
 import type { AgentRunner } from "../agent/runner.js";
 import { AttachmentCache } from "../discord/attachment-cache.js";
-import { sendDiscordMessage } from "../discord/sender.js";
-import { DiscordStreamingWriter } from "../discord/streaming-writer.js";
 import { childLogger } from "../logger.js";
 import { buildCompactionSummaryContext, MemoryCompactor } from "../memory/compactor.js";
 import { DreamRunner } from "../memory/dream-runner.js";
 import { DreamScheduler } from "../memory/dream-scheduler.js";
 import { EventLog } from "../memory/event-log.js";
-import { createDiscordActionRuntimeFromMessage } from "../tools/discord-actions.js";
-import { createToolRegistry } from "../tools/tool-registry.js";
 import type {
-  AgentContextMessage,
-  AgentRunRequest,
-  AgentRunResult,
   AppConfig,
   BotIdentity,
+  ConversationRuntimeState,
+  EngagementDecision,
   GuildWorkspace,
   HistoryEntry,
   NormalizedDiscordEvent,
   NormalizedDiscordMessage,
-  RuntimeAgentTool,
   StayDecision,
 } from "../types.js";
 import { delay, randomDebounceMs } from "./debounce.js";
@@ -33,6 +26,7 @@ import {
   shouldFlushByMessageCount,
 } from "./follow-up-batch.js";
 import { checkReplyHardGates, isDirectedAtBot, noteBotReply, noteHumanMessage } from "./reply-cadence.js";
+import { ConversationResponder } from "./responder.js";
 import { ConversationStateStore, conversationId } from "./state-store.js";
 import { decideStay, forcedSilentStay } from "./stay-decision.js";
 
@@ -43,6 +37,7 @@ export class ConversationOrchestrator {
   private readonly states = new ConversationStateStore();
   private readonly attachmentCache = new AttachmentCache();
   private readonly dreamScheduler: DreamScheduler;
+  private readonly responder: ConversationResponder;
 
   constructor(
     private readonly config: AppConfig,
@@ -51,6 +46,7 @@ export class ConversationOrchestrator {
     private readonly botIdentity: BotIdentity,
   ) {
     this.dreamScheduler = new DreamScheduler(config, agentsPath, runner);
+    this.responder = new ConversationResponder(config, agentsPath, runner, botIdentity, this.attachmentCache);
   }
 
   async onMessage(
@@ -68,22 +64,19 @@ export class ConversationOrchestrator {
       return;
     }
     const id = conversationId(message);
-    const state = this.states.get(id);
-    // Serialize per-channel: append to the promise chain so only one processMessage
-    // runs at a time per conversation, preventing parallel LLM calls and duplicate replies.
-    const tail = (state.processingChain ?? Promise.resolve())
-      .then(() => this._processMessage(event, workspace, discordMessage))
-      .catch((err: unknown) => {
+    await this.states.enqueue(
+      id,
+      () => this.processMessage(event, workspace, discordMessage),
+      (err) => {
         log.error(
           { err, guildId: event.guildId, channelId: event.channelId, messageId: event.messageId },
           "message processing failed",
         );
-      });
-    state.processingChain = tail;
-    await tail;
+      },
+    );
   }
 
-  private async _processMessage(
+  private async processMessage(
     event: Extract<NormalizedDiscordEvent, { type: "message_create" }>,
     workspace: GuildWorkspace,
     discordMessage?: Message<boolean>,
@@ -107,19 +100,7 @@ export class ConversationOrchestrator {
       "conversation message received",
     );
     this.dreamScheduler.startForGuild(workspace);
-    const compacted = await new MemoryCompactor(workspace.workspaceRoot, this.config, async (events) => {
-      const result = await this.runner.run({
-        sessionId: `compact:${workspace.guildId}`,
-        messages: buildCompactionSummaryContext(
-          events,
-          this.config.runtime.timezone,
-          this.botIdentity.userId,
-        ),
-        allowEmptyText: false,
-        traceLabel: "compaction",
-      });
-      return result.text;
-    }).compactIfNeeded();
+    const compacted = await this.compact(workspace);
     if (compacted && this.config.memory.dream.runOnCompaction) {
       log.info({ guildId: workspace.guildId, reason: "compaction" }, "dream run triggered");
       await this.dreamScheduler.runNow(workspace, "compaction");
@@ -183,7 +164,7 @@ export class ConversationOrchestrator {
 
   private async queueEngagedFollowUp(input: {
     conversationKey: string;
-    state: ReturnType<ConversationStateStore["get"]>;
+    state: ConversationRuntimeState;
     workspace: GuildWorkspace;
     discordMessage?: Message<boolean> | undefined;
     message: NormalizedDiscordMessage;
@@ -233,16 +214,16 @@ export class ConversationOrchestrator {
     }
 
     input.state.pendingTimer = setTimeout(() => {
-      const state = this.states.get(input.conversationKey);
-      const tail = (state.processingChain ?? Promise.resolve())
-        .then(() => this.flushEngagedFollowUp(input.conversationKey, input.workspace, input.discordMessage))
-        .catch((error: unknown) => {
+      void this.states.enqueue(
+        input.conversationKey,
+        () => this.flushEngagedFollowUp(input.conversationKey, input.workspace, input.discordMessage),
+        (error) => {
           log.error(
             { err: error, guildId: input.workspace.guildId, channelId: input.message.channelId },
             "engaged follow-up flush failed",
           );
-        });
-      state.processingChain = tail;
+        },
+      );
     }, delayMs);
     input.state.pendingTimer.unref();
   }
@@ -344,16 +325,16 @@ export class ConversationOrchestrator {
         );
         state.pendingFollowUp = waitBatch;
         state.pendingTimer = setTimeout(() => {
-          const currentState = this.states.get(conversationKey);
-          const tail = (currentState.processingChain ?? Promise.resolve())
-            .then(() => this.flushEngagedFollowUp(conversationKey, workspace, discordMessage))
-            .catch((error: unknown) => {
+          void this.states.enqueue(
+            conversationKey,
+            () => this.flushEngagedFollowUp(conversationKey, workspace, discordMessage),
+            (error) => {
               log.error(
                 { err: error, guildId: workspace.guildId, channelId: discordMessage.channelId },
                 "engaged follow-up wait retry failed",
               );
-            });
-          currentState.processingChain = tail;
+            },
+          );
         }, delayMs);
         state.pendingTimer.unref();
         log.info(
@@ -399,7 +380,7 @@ export class ConversationOrchestrator {
         );
         return;
       }
-      await this.react(stay, events, workspace, discordMessage, currentMessage);
+      await this.responder.react(stay, events, workspace, discordMessage, currentMessage);
       return;
     }
     if (
@@ -422,7 +403,7 @@ export class ConversationOrchestrator {
     await this.reply(stay, events, workspace, discordMessage);
   }
 
-  private clearPendingFollowUp(state: ReturnType<ConversationStateStore["get"]>): void {
+  private clearPendingFollowUp(state: ConversationRuntimeState): void {
     if (state.pendingTimer) clearTimeout(state.pendingTimer);
     delete state.pendingTimer;
     delete state.pendingFollowUp;
@@ -430,7 +411,7 @@ export class ConversationOrchestrator {
 
   private async maybeAmbientEngage(
     workspaceRoot: string,
-    state: ReturnType<ConversationStateStore["get"]>,
+    state: ConversationRuntimeState,
     events: NormalizedDiscordEvent[],
     message: NormalizedDiscordMessage,
     previousLastHumanAt?: string,
@@ -482,277 +463,17 @@ export class ConversationOrchestrator {
     return decision;
   }
 
-  private startTypingKeepAlive(channel: TextBasedChannel): () => void {
-    if (!channel.isSendable()) return () => {};
-    void channel.sendTyping().catch(() => {});
-    const timer = setInterval(() => {
-      void channel.sendTyping().catch(() => {});
-    }, 8000);
-    return () => clearInterval(timer);
-  }
-
   private async reply(
-    task: Parameters<typeof buildResponseContext>[0]["task"],
+    task: EngagementDecision | StayDecision,
     events: NormalizedDiscordEvent[],
     workspace: GuildWorkspace,
     discordMessage?: Message<boolean>,
   ): Promise<void> {
-    if (!discordMessage) {
-      log.warn({ guildId: workspace.guildId }, "reply skipped because discord message is unavailable");
-      return;
+    const messageId = await this.responder.reply(task, events, workspace, discordMessage);
+    if (messageId) {
+      const state = this.states.get(conversationId(taskMessageKey(events)));
+      noteBotReply(this.config, state, messageId);
     }
-    const startedAt = Date.now();
-    const state = this.states.get(conversationId(taskMessageKey(events)));
-    log.info(
-      {
-        guildId: workspace.guildId,
-        channelId: discordMessage.channelId,
-        targetMessageIds: task.targetMessageIds,
-        action: "reply",
-      },
-      "agent reply started",
-    );
-    const stopTyping = this.startTypingKeepAlive(discordMessage.channel);
-    const context = await buildResponseContext({
-      agentsPath: this.agentsPath,
-      workspaceRoot: workspace.workspaceRoot,
-      config: this.config,
-      events,
-      targetMessageIds: task.targetMessageIds,
-      task,
-      botIdentity: this.botIdentity,
-    });
-    const toolContext = {
-      guildId: workspace.guildId,
-      workspaceRoot: workspace.workspaceRoot,
-      channelId: discordMessage.channelId,
-      actorUserId: discordMessage.author.id,
-    };
-    const sendState = { firstReplySent: false };
-    let writerRef: DiscordStreamingWriter | undefined;
-    const discordActions = createDiscordActionRuntimeFromMessage(
-      discordMessage,
-      toolContext,
-      sendState,
-      {
-        softLimitChars: this.config.streaming.softLimitChars,
-        hardLimitChars: this.config.streaming.hardLimitChars,
-      },
-      async () => {
-        await writerRef?.forceFlush();
-      },
-    );
-    const tools = createToolRegistry(this.config, toolContext, {
-      attachmentCache: this.attachmentCache,
-      discordActions,
-    });
-    try {
-      if (this.config.streaming.enabled && this.config.discord.enableMessageEditStreaming) {
-        const writer = new DiscordStreamingWriter(
-          discordMessage.channel,
-          this.config,
-          discordMessage,
-          sendState,
-          stopTyping,
-        );
-        writerRef = writer;
-        const result = await this.runner.run({
-          sessionId: `discord:${workspace.guildId}:${discordMessage.channelId}`,
-          messages: context,
-          tools,
-          onTextDelta: (delta) => writer.append(delta),
-          traceLabel: "response",
-        });
-        const finalResult = await this.retryEmptyReply({
-          result,
-          context,
-          workspace,
-          discordMessage,
-          streaming: true,
-          onTextDelta: (delta) => writer.append(delta),
-        });
-        const sent = await writer.finish(replyTextOrFallback(finalResult.text));
-        if (sent) noteBotReply(this.config, state, sent.id);
-        log.info(
-          {
-            guildId: workspace.guildId,
-            channelId: discordMessage.channelId,
-            messageId: sent?.id,
-            streaming: true,
-            durationMs: Date.now() - startedAt,
-            outputLength: finalResult.text.length,
-          },
-          "agent reply completed",
-        );
-      } else {
-        const result = await this.runner.run({
-          sessionId: `discord:${workspace.guildId}:${discordMessage.channelId}`,
-          messages: context,
-          tools,
-          traceLabel: "response",
-        });
-        const finalResult = await this.retryEmptyReply({
-          result,
-          context,
-          workspace,
-          discordMessage,
-          streaming: false,
-        });
-        const sent = await sendDiscordMessage(
-          discordMessage.channel,
-          replyTextOrFallback(finalResult.text),
-          sendState.firstReplySent ? {} : { replyTo: discordMessage },
-        );
-        noteBotReply(this.config, state, sent.id);
-        log.info(
-          {
-            guildId: workspace.guildId,
-            channelId: discordMessage.channelId,
-            messageId: sent.id,
-            streaming: false,
-            durationMs: Date.now() - startedAt,
-            outputLength: finalResult.text.length,
-          },
-          "agent reply completed",
-        );
-      }
-    } finally {
-      stopTyping();
-    }
-  }
-
-  private async react(
-    task: StayDecision,
-    events: NormalizedDiscordEvent[],
-    workspace: GuildWorkspace,
-    discordMessage: Message<boolean>,
-    currentMessage: NormalizedDiscordMessage,
-  ): Promise<void> {
-    const startedAt = Date.now();
-    const targetMessageIds = task.targetMessageIds.length > 0 ? task.targetMessageIds : [currentMessage.id];
-    const reactionTask: StayDecision = { ...task, stayEngaged: true, targetMessageIds };
-    const toolContext = {
-      guildId: workspace.guildId,
-      workspaceRoot: workspace.workspaceRoot,
-      channelId: discordMessage.channelId,
-      actorUserId: discordMessage.author.id,
-    };
-    let reacted = false;
-    const tools = reactionOnlyTools(
-      createToolRegistry(this.config, toolContext, {
-        discordActions: createDiscordActionRuntimeFromMessage(discordMessage, toolContext),
-      }),
-      () => {
-        reacted = true;
-      },
-    );
-    if (tools.length === 0) {
-      log.warn(
-        {
-          guildId: workspace.guildId,
-          channelId: discordMessage.channelId,
-          messageId: currentMessage.id,
-          targetMessageIds,
-        },
-        "agent reaction skipped because discord_react tool is unavailable",
-      );
-      return;
-    }
-
-    log.info(
-      {
-        guildId: workspace.guildId,
-        channelId: discordMessage.channelId,
-        targetMessageIds,
-        reactionHint: reactionTask.reactionHint,
-      },
-      "agent reaction started",
-    );
-    try {
-      const result = await this.runner.run({
-        sessionId: `react:${workspace.guildId}:${discordMessage.channelId}`,
-        messages: await buildReactionContext({
-          agentsPath: this.agentsPath,
-          workspaceRoot: workspace.workspaceRoot,
-          events,
-          targetMessageIds,
-          task: reactionTask,
-          timezone: this.config.runtime.timezone,
-          botIdentity: this.botIdentity,
-        }),
-        tools,
-        allowEmptyText: true,
-        traceLabel: "reaction",
-      });
-      log.info(
-        {
-          guildId: workspace.guildId,
-          channelId: discordMessage.channelId,
-          targetMessageIds,
-          durationMs: Date.now() - startedAt,
-          outputLength: result.text.length,
-          reacted,
-        },
-        "agent reaction completed",
-      );
-      if (!reacted) {
-        log.warn(
-          {
-            guildId: workspace.guildId,
-            channelId: discordMessage.channelId,
-            targetMessageIds,
-            outputLength: result.text.length,
-          },
-          "agent reaction completed without discord_react call",
-        );
-      }
-    } catch (error) {
-      log.warn(
-        {
-          err: error,
-          guildId: workspace.guildId,
-          channelId: discordMessage.channelId,
-          targetMessageIds,
-          durationMs: Date.now() - startedAt,
-        },
-        "agent reaction failed",
-      );
-    }
-  }
-
-  private async retryEmptyReply(input: {
-    result: AgentRunResult;
-    context: AgentContextMessage[];
-    workspace: GuildWorkspace;
-    discordMessage: Message<boolean>;
-    streaming: boolean;
-    onTextDelta?: ((text: string) => Promise<void>) | undefined;
-  }): Promise<AgentRunResult> {
-    if (input.result.text.trim().length > 0) return input.result;
-    log.warn(
-      {
-        guildId: input.workspace.guildId,
-        channelId: input.discordMessage.channelId,
-        messageId: input.discordMessage.id,
-        streaming: input.streaming,
-      },
-      "agent reply was empty; retrying without tools",
-    );
-    const retryRequest: AgentRunRequest = {
-      sessionId: `discord-retry:${input.workspace.guildId}:${input.discordMessage.channelId}`,
-      traceLabel: "response_retry",
-      messages: [
-        ...input.context,
-        {
-          role: "system",
-          content:
-            "The previous response generation returned empty text. Produce the Discord reply now as plain message text only. Do not call tools.",
-        },
-      ],
-    };
-    return this.runner.run(
-      input.onTextDelta ? { ...retryRequest, onTextDelta: input.onTextDelta } : retryRequest,
-    );
   }
 
   private isStrongTrigger(message: NormalizedDiscordMessage): boolean {
@@ -774,7 +495,14 @@ export class ConversationOrchestrator {
         },
       },
     };
-    const compacted = await new MemoryCompactor(workspace.workspaceRoot, forcedConfig, async (events) => {
+    return this.compact(workspace, forcedConfig);
+  }
+
+  private async compact(
+    workspace: GuildWorkspace,
+    config: AppConfig = this.config,
+  ): Promise<HistoryEntry | undefined> {
+    return new MemoryCompactor(workspace.workspaceRoot, config, async (events) => {
       const result = await this.runner.run({
         sessionId: `compact:${workspace.guildId}`,
         messages: buildCompactionSummaryContext(
@@ -787,7 +515,6 @@ export class ConversationOrchestrator {
       });
       return result.text;
     }).compactIfNeeded();
-    return compacted;
   }
 
   async adminForceDream(workspace: GuildWorkspace): Promise<boolean> {
@@ -802,7 +529,7 @@ export class ConversationOrchestrator {
   }
 }
 
-function shouldIdleDisengage(config: AppConfig, state: ReturnType<ConversationStateStore["get"]>): boolean {
+function shouldIdleDisengage(config: AppConfig, state: ConversationRuntimeState): boolean {
   if (
     state.unrelatedHumanMessagesSinceLastBot >=
     config.conversation.engaged.disengageAfterUnrelatedHumanMessages
@@ -820,12 +547,10 @@ function findMessageById(
   messageId: string | undefined,
 ): NormalizedDiscordMessage | undefined {
   if (!messageId) return undefined;
-  return [...events]
-    .reverse()
-    .find(
-      (event): event is Extract<NormalizedDiscordEvent, { type: "message_create" | "message_update" }> =>
-        (event.type === "message_create" || event.type === "message_update") && event.messageId === messageId,
-    )?.payload;
+  return events.findLast(
+    (event): event is Extract<NormalizedDiscordEvent, { type: "message_create" | "message_update" }> =>
+      (event.type === "message_create" || event.type === "message_update") && event.messageId === messageId,
+  )?.payload;
 }
 
 function taskMessageKey(events: NormalizedDiscordEvent[]): {
@@ -833,32 +558,13 @@ function taskMessageKey(events: NormalizedDiscordEvent[]): {
   channelId: string;
   threadId?: string;
 } {
-  const latest = [...events]
-    .reverse()
-    .find((event) => event.type === "message_create" || event.type === "message_update");
+  const latest = events.findLast(
+    (event) => event.type === "message_create" || event.type === "message_update",
+  );
   if (!latest) return { guildId: "unknown", channelId: "unknown" };
   return {
     guildId: latest.guildId,
     channelId: latest.channelId,
     ...(latest.threadId ? { threadId: latest.threadId } : {}),
   };
-}
-
-function replyTextOrFallback(text: string): string {
-  return text.trim().length > 0 ? text : "방금 답변을 제대로 만들지 못했어요.";
-}
-
-function reactionOnlyTools(tools: RuntimeAgentTool[], onReact: () => void): RuntimeAgentTool[] {
-  const reactTool = tools.find((tool) => tool.name === "discord_react");
-  if (!reactTool) return [];
-  return [
-    {
-      ...reactTool,
-      execute: async (...args: Parameters<RuntimeAgentTool["execute"]>) => {
-        const result = await reactTool.execute(...args);
-        onReact();
-        return { ...result, terminate: true };
-      },
-    },
-  ];
 }

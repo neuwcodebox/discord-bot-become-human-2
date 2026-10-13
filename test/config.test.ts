@@ -1,22 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { defaultConfig, parseConfig } from "../src/config.js";
-import type { AppConfig } from "../src/types.js";
 
 describe("config parsing", () => {
   it("fills follow-up batch defaults for existing config files", () => {
-    const input = structuredClone(defaultConfig);
-    delete (input.conversation.engaged as Partial<AppConfig["conversation"]["engaged"]>).followUpBatch;
+    const { followUpBatch: _followUpBatch, ...engaged } = defaultConfig.conversation.engaged;
+    const input = {
+      ...defaultConfig,
+      conversation: { ...defaultConfig.conversation, engaged },
+    };
 
     const parsed = parseConfig(input);
 
-    expect(parsed.conversation.engaged.followUpBatch).toEqual(
-      defaultConfig.conversation.engaged.followUpBatch,
-    );
+    expect(parsed.conversation.engaged.followUpBatch).toEqual({
+      quietDebounceMs: [3000, 5000],
+      directTriggerDebounceMs: [1000, 2000],
+      maxWaitMs: 15000,
+      maxMessages: 4,
+    });
   });
 
   it("fills context defaults for existing config files", () => {
-    const input = structuredClone(defaultConfig);
-    delete (input as Partial<AppConfig>).context;
+    const { context: _context, ...input } = defaultConfig;
 
     const parsed = parseConfig(input);
 
@@ -26,9 +30,11 @@ describe("config parsing", () => {
   });
 
   it("fills ambient decision cooldown for existing config files", () => {
-    const input = structuredClone(defaultConfig);
-    delete (input.conversation.notEngaged as Partial<AppConfig["conversation"]["notEngaged"]>)
-      .ambientDecisionCooldownMs;
+    const { ambientDecisionCooldownMs: _cooldown, ...notEngaged } = defaultConfig.conversation.notEngaged;
+    const input = {
+      ...defaultConfig,
+      conversation: { ...defaultConfig.conversation, notEngaged },
+    };
 
     const parsed = parseConfig(input);
 
@@ -37,25 +43,23 @@ describe("config parsing", () => {
 
   it("ignores obsolete direct trigger confidence config", () => {
     const input = {
-      ...structuredClone(defaultConfig),
+      ...defaultConfig,
       conversation: {
-        ...structuredClone(defaultConfig.conversation),
+        ...defaultConfig.conversation,
         notEngaged: {
-          ...structuredClone(defaultConfig.conversation.notEngaged),
+          ...defaultConfig.conversation.notEngaged,
           directTriggerConfidence: 0.5,
         },
       },
     };
 
     const parsed = parseConfig(input);
-    const notEngaged: object = parsed.conversation.notEngaged;
-
-    expect("directTriggerConfidence" in notEngaged).toBe(false);
+    expect(parsed.conversation.notEngaged).not.toHaveProperty("directTriggerConfidence");
   });
 
   it("defaults adminUserIds to empty array when absent", () => {
-    const input = structuredClone(defaultConfig);
-    delete (input.discord as Partial<AppConfig["discord"]>).adminUserIds;
+    const { adminUserIds: _adminUserIds, ...discord } = defaultConfig.discord;
+    const input = { ...defaultConfig, discord };
 
     const parsed = parseConfig(input);
 

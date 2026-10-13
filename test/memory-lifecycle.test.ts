@@ -1,5 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { defaultConfig } from "../src/config.js";
@@ -7,23 +6,12 @@ import { MemoryCompactor } from "../src/memory/compactor.js";
 import { EventLog } from "../src/memory/event-log.js";
 import { readJsonl } from "../src/storage/jsonl.js";
 import type { HistoryEntry, NormalizedDiscordEvent } from "../src/types.js";
+import { createTestWorkspace } from "./helpers/workspace.js";
 
 describe("memory lifecycle", () => {
   it("uses .cursor as compaction cursor, not event id allocation", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-memory-"));
-    const log = new EventLog(root);
-    const config = {
-      ...defaultConfig,
-      memory: {
-        ...defaultConfig.memory,
-        compaction: { enabled: true, maxEventsBeforeCompaction: 3, minEventsPerSummary: 2 },
-      },
-      conversation: { ...defaultConfig.conversation, maxRecentMessages: 1 },
-    };
-
-    await log.append(messageEvent("m1", "u1", "first"));
-    await log.append(messageEvent("m2", "u2", "second"));
-    await log.append(messageEvent("m3", "u1", "third"));
+    const { root, log, config } = await createMemoryFixture();
+    await appendConversation(log);
 
     await expect(readFile(join(root, "memory", ".cursor"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
 
@@ -39,20 +27,12 @@ describe("memory lifecycle", () => {
   });
 
   it("does not target bot-authored USER.md files during compaction", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-memory-"));
-    const log = new EventLog(root);
-    const config = {
-      ...defaultConfig,
-      memory: {
-        ...defaultConfig.memory,
-        compaction: { enabled: true, maxEventsBeforeCompaction: 3, minEventsPerSummary: 2 },
-      },
-      conversation: { ...defaultConfig.conversation, maxRecentMessages: 1 },
-    };
-
-    await log.append(messageEvent("m1", "human-1", "hello"));
-    await log.append(messageEvent("m2", "bot-1", "bot reply", true));
-    await log.append(messageEvent("m3", "human-2", "next"));
+    const { root, log, config } = await createMemoryFixture();
+    await appendConversation(log, [
+      messageEvent("m1", "human-1", "hello"),
+      messageEvent("m2", "bot-1", "bot reply", true),
+      messageEvent("m3", "human-2", "next"),
+    ]);
 
     const entry = await new MemoryCompactor(root, config).compactIfNeeded();
 
@@ -62,45 +42,22 @@ describe("memory lifecycle", () => {
   });
 
   it("uses an injected summary generator for compacted archive entries", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-memory-"));
-    const log = new EventLog(root);
-    const config = {
-      ...defaultConfig,
-      memory: {
-        ...defaultConfig.memory,
-        compaction: { enabled: true, maxEventsBeforeCompaction: 3, minEventsPerSummary: 2 },
-      },
-      conversation: { ...defaultConfig.conversation, maxRecentMessages: 1 },
-    };
+    const { root, log, config } = await createMemoryFixture();
+    await appendConversation(log);
 
-    await log.append(messageEvent("m1", "u1", "first"));
-    await log.append(messageEvent("m2", "u2", "second"));
-    await log.append(messageEvent("m3", "u1", "third"));
-
-    const entry = await new MemoryCompactor(root, config, async (events) => {
-      expect(events).toHaveLength(2);
-      return "LLM archive summary";
-    }).compactIfNeeded();
+    const entry = await new MemoryCompactor(
+      root,
+      config,
+      async () => "LLM archive summary",
+    ).compactIfNeeded();
 
     expect(entry?.summary).toBe("LLM archive summary");
     expect(entry?.channelIds).toEqual(["c"]);
   });
 
   it("falls back to raw archive summary when compaction summarization fails", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-memory-"));
-    const log = new EventLog(root);
-    const config = {
-      ...defaultConfig,
-      memory: {
-        ...defaultConfig.memory,
-        compaction: { enabled: true, maxEventsBeforeCompaction: 3, minEventsPerSummary: 2 },
-      },
-      conversation: { ...defaultConfig.conversation, maxRecentMessages: 1 },
-    };
-
-    await log.append(messageEvent("m1", "u1", "first"));
-    await log.append(messageEvent("m2", "u2", "second"));
-    await log.append(messageEvent("m3", "u1", "third"));
+    const { root, log, config } = await createMemoryFixture();
+    await appendConversation(log);
 
     const entry = await new MemoryCompactor(root, config, async () => {
       throw new Error("LLM unavailable");
@@ -110,6 +67,33 @@ describe("memory lifecycle", () => {
     await expect(readFile(join(root, "memory", ".cursor"), "utf8")).resolves.toBe("2\n");
   });
 });
+
+async function createMemoryFixture() {
+  const root = await createTestWorkspace("dbh2-memory-");
+  return {
+    root,
+    log: new EventLog(root),
+    config: {
+      ...defaultConfig,
+      memory: {
+        ...defaultConfig.memory,
+        compaction: { enabled: true, maxEventsBeforeCompaction: 3, minEventsPerSummary: 2 },
+      },
+      conversation: { ...defaultConfig.conversation, maxRecentMessages: 1 },
+    },
+  };
+}
+
+async function appendConversation(
+  log: EventLog,
+  events = [
+    messageEvent("m1", "u1", "first"),
+    messageEvent("m2", "u2", "second"),
+    messageEvent("m3", "u1", "third"),
+  ],
+): Promise<void> {
+  for (const event of events) await log.append(event);
+}
 
 function messageEvent(
   messageId: string,

@@ -26,4 +26,11 @@ export class ConversationStateStore {
   set(id: string, state: ConversationRuntimeState): void {
     this.states.set(id, state);
   }
+
+  enqueue(id: string, task: () => Promise<void>, onError: (error: unknown) => void): Promise<void> {
+    const state = this.get(id);
+    const pending = (state.processingChain ?? Promise.resolve()).then(task).catch(onError);
+    state.processingChain = pending;
+    return pending;
+  }
 }

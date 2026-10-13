@@ -2,6 +2,7 @@ import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model, TSchema } from "@earendil-works/pi-ai";
 
 export type { AppConfig } from "./config.js";
+export type { EngagementDecision, StayDecision } from "./conversation/decision-schema.js";
 
 export type RuntimeAgentTool = AgentTool<TSchema, unknown>;
 export type RuntimeModel = Model<Api>;
@@ -174,39 +175,6 @@ export type PendingFollowUpBatch = {
   messageIds: string[];
   relatedToBot: boolean;
   waitCount: number;
-};
-
-export type EngagementDecision = {
-  engage: boolean;
-  confidence: number;
-  reason: string;
-  targetMessageIds: string[];
-  expectedRole:
-    | "answer_question"
-    | "join_casually"
-    | "handle_attachment"
-    | "clarify"
-    | "react_only"
-    | "other";
-};
-
-export type StayDecision = {
-  stayEngaged: boolean;
-  action: "reply" | "wait" | "silent_track" | "react" | "disengage";
-  confidence: number;
-  reason: string;
-  attention: "directed_at_bot" | "bot_relevant" | "human_to_human" | "background" | "topic_changed";
-  targetMessageIds: string[];
-  reactionHint?: "ack" | "thanks" | "funny" | "agree" | "care" | "surprised" | undefined;
-  replyPriority: "urgent" | "normal" | "low" | "none";
-  disengageReason?:
-    | "conversation_ended"
-    | "topic_moved_without_bot"
-    | "bot_not_needed"
-    | "too_many_bot_turns"
-    | "idle_timeout"
-    | "uncertain"
-    | undefined;
 };
 
 export type ToolContext = {

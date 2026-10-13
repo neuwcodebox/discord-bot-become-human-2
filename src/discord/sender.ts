@@ -7,16 +7,6 @@ export const safeAllowedMentions: MessageMentionOptions = {
   repliedUser: false,
 };
 
-type SendPayload = {
-  content: string;
-  allowedMentions: MessageMentionOptions;
-  files?: AttachmentBuilder[];
-};
-
-type SendableChannel = TextBasedChannel & {
-  send: (options: SendPayload) => Promise<Message<boolean>>;
-};
-
 export async function sendDiscordMessage(
   channel: TextBasedChannel,
   content: string,
@@ -31,7 +21,8 @@ export async function sendDiscordMessage(
       allowedMentions: safeAllowedMentions,
     });
   }
-  return (channel as SendableChannel).send({
+  if (!channel.isSendable()) throw new Error("Channel does not support sending messages.");
+  return channel.send({
     content,
     ...fileOptions,
     allowedMentions: safeAllowedMentions,

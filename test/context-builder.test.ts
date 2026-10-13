@@ -1,15 +1,23 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  buildDreamPhase1Context,
+  buildEngagementDecisionContext,
   buildReactionContext,
   buildResponseContext,
   buildStayDecisionContext,
 } from "../src/agent/context-builder.js";
+import { buildDreamPhase1Context } from "../src/agent/dream-context-builder.js";
 import { defaultConfig } from "../src/config.js";
-import type { BotIdentity, ConversationRuntimeState, NormalizedDiscordMessage } from "../src/types.js";
+import type {
+  AgentContextMessage,
+  AgentRole,
+  BotIdentity,
+  ConversationRuntimeState,
+  EngagementDecision,
+} from "../src/types.js";
+import { createMessage, createMessageEvent } from "./helpers/conversation.js";
+import { createTestWorkspace } from "./helpers/workspace.js";
 
 const botIdentity: BotIdentity = {
   userId: "bot-self",
@@ -19,13 +27,21 @@ const botIdentity: BotIdentity = {
   mention: "<@bot-self>",
   names: ["Self Bot", "self-bot", "self-bot#0001"],
 };
-
+const responseTask: EngagementDecision = {
+  engage: true,
+  confidence: 1,
+  reason: "direct",
+  targetMessageIds: ["m1"],
+  expectedRole: "answer_question",
+};
 describe("context builder", () => {
-  it("does not expose runtime scheduling fields to stay decision context", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-context-"));
-    const agentsPath = join(root, "AGENTS.md");
-    await writeFile(agentsPath, "runtime instructions", "utf8");
-    const message = normalizedMessage("m1");
+  it.each([
+    { phase: "engagement", build: buildEngagementDecisionContext },
+    { phase: "stay", build: buildStayDecisionContext },
+  ])("keeps runtime scheduling out of $phase decisions", async ({ build }) => {
+    const input = await contextFixture();
+    const pendingTimer = setTimeout(() => {}, 0);
+    clearTimeout(pendingTimer);
     const state: ConversationRuntimeState = {
       engagement: "engaged",
       lastBotMessageAt: "2026-05-11T12:00:00.000Z",
@@ -36,6 +52,7 @@ describe("context builder", () => {
       humanMessagesSinceLastBot: 1,
       unrelatedHumanMessagesSinceLastBot: 0,
       cooldownUntil: "2026-05-11T12:00:30.000Z",
+      pendingTimer,
       pendingFollowUp: {
         since: "2026-05-11T12:00:03.000Z",
         lastMessageAt: "2026-05-11T12:00:03.000Z",
@@ -46,59 +63,19 @@ describe("context builder", () => {
       ambientReplyTimes: [],
     };
 
-    const context = await buildStayDecisionContext({
-      agentsPath,
-      workspaceRoot: root,
-      state,
-      events: [
-        {
-          type: "message_create",
-          time: message.createdAt,
-          guildId: message.guildId,
-          channelId: message.channelId,
-          messageId: message.id,
-          authorId: message.author.id,
-          payload: message,
-        },
-      ],
-      currentMessage: message,
-      botIdentity,
-    });
-    const systemMessage = context.find((entry) => entry.role === "system")?.content ?? "";
+    const context = await build({ ...input, state, currentMessage: createMessage() });
+    const system = messageContent(context, "system");
 
-    expect(systemMessage).toContain("lastBotMessageAt");
-    expect(systemMessage).toContain("<action_semantics>");
-    expect(systemMessage).toContain("react:");
-    expect(systemMessage).toContain("one Discord emoji reaction only");
-    expect(systemMessage).toContain("Do not use wait because of cooldown");
-    expect(systemMessage).not.toContain("cooldownUntil");
-    expect(systemMessage).not.toContain("lastAmbientDecisionAt");
-    expect(systemMessage).not.toContain("pendingFollowUp");
-    expect(systemMessage).not.toContain("waitCount");
+    expect(system).toContain('"lastBotMessageAt": "2026-05-11T12:00:00.000Z"');
+    for (const field of ["cooldownUntil", "lastAmbientDecisionAt", "pendingFollowUp", "pendingTimer"]) {
+      expect(system).not.toContain(field);
+    }
   });
 
-  it("builds reaction context that asks for a Discord reaction instead of a text reply", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-context-"));
-    const agentsPath = join(root, "AGENTS.md");
-    await writeFile(agentsPath, "runtime instructions", "utf8");
-    const message = normalizedMessage("m1");
-
+  it("limits the reaction agent to one emoji reaction without a text reply", async () => {
+    const input = await contextFixture();
     const context = await buildReactionContext({
-      agentsPath,
-      workspaceRoot: root,
-      events: [
-        {
-          type: "message_create",
-          time: message.createdAt,
-          guildId: message.guildId,
-          channelId: message.channelId,
-          messageId: message.id,
-          authorId: message.author.id,
-          payload: message,
-        },
-      ],
-      targetMessageIds: ["m1"],
-      botIdentity,
+      ...input,
       task: {
         stayEngaged: true,
         action: "react",
@@ -111,206 +88,152 @@ describe("context builder", () => {
       },
     });
 
-    expect(context[0]?.content).toContain("discord_react");
-    expect(context[0]?.content).toContain("Do not write a Discord message");
-    expect(context.find((entry) => entry.role === "system")?.content).toContain('"reactionHint": "ack"');
-    expect(context.find((entry) => entry.role === "user")?.content).toContain('id="m1"');
-    expect(context.find((entry) => entry.role === "user")?.content).toContain("target");
-    expect(context.find((entry) => entry.role === "user")?.content).toContain("Common neutral examples");
-    expect(context.find((entry) => entry.role === "user")?.content).toContain("choose naturally");
+    expect(messageContent(context, "system")).toContain("discord_react");
+    expect(messageContent(context, "system")).toContain("Do not write a Discord message");
+    expect(messageContent(context, "system")).toContain("Use exactly one tool call and then stop");
+    expect(messageContent(context, "user")).toContain('id="m1"');
   });
 
-  it("adds response guardrails without overriding the persona documents", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-context-"));
-    const agentsPath = join(root, "AGENTS.md");
-    await writeFile(agentsPath, "runtime instructions", "utf8");
-    const message = normalizedMessage("m1");
+  it("keeps runtime instructions and persona documents in the system role", async () => {
+    const input = await contextFixture();
+    await writeWorkspaceFile(input.workspaceRoot, "SOUL.md", "soul persona");
+    await writeWorkspaceFile(input.workspaceRoot, "GROUP.md", "group conventions");
+    await writeWorkspaceFile(input.workspaceRoot, "TOOLS.md", "tool reference");
 
-    const context = await buildResponseContext({
-      agentsPath,
-      workspaceRoot: root,
-      config: defaultConfig,
-      events: [
-        {
-          type: "message_create",
-          time: message.createdAt,
-          guildId: message.guildId,
-          channelId: message.channelId,
-          messageId: message.id,
-          authorId: message.author.id,
-          payload: message,
-        },
-      ],
-      targetMessageIds: ["m1"],
-      task: {
-        engage: true,
-        confidence: 1,
-        reason: "direct",
-        targetMessageIds: ["m1"],
-        expectedRole: "answer_question",
-      },
-      botIdentity,
-    });
-    const systemMessage = context.find((entry) => entry.role === "system")?.content ?? "";
+    const context = await buildResponseContext(input);
+    const system = messageContent(context, "system");
+    const user = messageContent(context, "user");
 
-    expect(systemMessage).toContain("<guardrails>");
-    expect(systemMessage).toContain("Focus on targetMessageIds");
-    expect(systemMessage).toContain("Do not mention internal JSON");
-    expect(systemMessage).toContain("Use tools only when they are actually needed");
+    for (const instruction of [
+      "runtime instructions",
+      "soul persona",
+      "group conventions",
+      "tool reference",
+    ]) {
+      expect(system).toContain(instruction);
+      expect(user).not.toContain(instruction);
+    }
+    expect(system).toContain("Focus on targetMessageIds");
+    expect(system).toContain("Do not mention internal JSON");
   });
 
-  it("marks this bot as me, other bots as bot, and includes bot identity in response context", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-context-"));
-    const agentsPath = join(root, "AGENTS.md");
-    await writeFile(agentsPath, "runtime instructions", "utf8");
-    const human = normalizedMessage("m1");
-    const selfBot = normalizedMessage("m2", "bot-self", "Self Bot", true);
-    const otherBot = normalizedMessage("m3", "bot-other", "Other Bot", true);
+  it("identifies this bot separately from other bots in the response transcript", async () => {
+    const input = await contextFixture([
+      createMessage(),
+      createMessage("m2", {
+        author: { id: "bot-self", username: "Self Bot", displayName: "Self Bot", isBot: true },
+      }),
+      createMessage("m3", {
+        author: { id: "bot-other", username: "Other Bot", displayName: "Other Bot", isBot: true },
+      }),
+    ]);
+    const context = await buildResponseContext(input);
+    const system = messageContent(context, "system");
+    const user = messageContent(context, "user");
 
-    const context = await buildResponseContext({
-      agentsPath,
-      workspaceRoot: root,
-      config: defaultConfig,
-      events: [human, selfBot, otherBot].map((message) => ({
-        type: "message_create" as const,
-        time: message.createdAt,
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        authorId: message.author.id,
-        payload: message,
-      })),
-      targetMessageIds: ["m1"],
-      task: {
-        engage: true,
-        confidence: 1,
-        reason: "direct",
-        targetMessageIds: ["m1"],
-        expectedRole: "answer_question",
-      },
-      botIdentity,
-    });
-    const systemMessage = context.find((entry) => entry.role === "system")?.content ?? "";
-    const userMessage = context.find((entry) => entry.role === "user")?.content ?? "";
-
-    expect(systemMessage).toContain("<bot_identity>");
-    expect(systemMessage).toContain("discord_user_id: bot-self");
-    expect(systemMessage).toContain("mention: <@bot-self>");
-    expect(systemMessage).toContain("username: self-bot");
-    expect(systemMessage).toContain("global_name: Self Bot");
-    expect(systemMessage).toContain("tag: self-bot#0001");
-    expect(systemMessage).not.toContain("known_names");
-    expect(userMessage).toContain('<msg id="m1" author="User"');
-    expect(userMessage).toContain('<msg id="m2" author="Self Bot" t="2026-05-11T21:00:03.000+09:00" me>');
-    expect(userMessage).toContain('<msg id="m3" author="Other Bot" t="2026-05-11T21:00:03.000+09:00" bot>');
+    expect(system).toContain("discord_user_id: bot-self");
+    expect(system).toContain("mention: <@bot-self>");
+    expect(user).toContain('<msg id="m1" author="User"');
+    expect(user).toContain('<msg id="m2" author="Self Bot" t="2026-05-11T21:00:03.000+09:00" me>');
+    expect(user).toContain('<msg id="m3" author="Other Bot" t="2026-05-11T21:00:03.000+09:00" bot>');
   });
 
-  it("adds durable memory guardrails to Dream context", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-context-"));
-    const agentsPath = join(root, "AGENTS.md");
-    await writeFile(agentsPath, "runtime instructions", "utf8");
+  it("loads only relevant user profiles as user context", async () => {
+    const input = await contextFixture();
+    await writeWorkspaceFile(input.workspaceRoot, "users/u1/USER.md", "relevant profile fact");
+    await writeWorkspaceFile(input.workspaceRoot, "users/u2/USER.md", "unrelated private fact");
 
+    const context = await buildResponseContext(input);
+
+    expect(messageContent(context, "user")).toContain("relevant profile fact");
+    expect(messageContent(context, "system")).not.toContain("relevant profile fact");
+    expect(context.map((message) => message.content).join("\n")).not.toContain("unrelated private fact");
+  });
+
+  it("keeps Dream memory instructions in the system role", async () => {
+    const input = await contextFixture();
     const context = await buildDreamPhase1Context({
-      agentsPath,
-      workspaceRoot: root,
+      ...input,
       history: [],
       inbox: [],
-      memory: "",
+      memory: "existing durable memory",
       userFiles: new Map(),
       existingSkillNames: [],
-      config: defaultConfig,
       reason: "test",
     });
-    const allContent = context.map((entry) => entry.content).join("\n");
 
-    expect(allContent).toContain("<guardrails>");
-    expect(allContent).toContain("one-off jokes");
-    expect(allContent).toContain("temporary tests");
-    expect(allContent).toContain("simple thanks");
-    expect(allContent).toContain("transient debugging logs");
+    expect(messageContent(context, "system")).toContain("Do NOT edit files");
+    expect(messageContent(context, "system")).toContain(
+      "Only preserve information that is likely to remain useful later",
+    );
+    expect(messageContent(context, "user")).toContain("existing durable memory");
+    expect(messageContent(context, "system")).not.toContain("existing durable memory");
   });
 
-  it("includes capped archive summaries and transcript in response context", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-context-"));
-    const agentsPath = join(root, "AGENTS.md");
-    await writeFile(agentsPath, "runtime instructions", "utf8");
-    await mkdir(join(root, "memory"), { recursive: true });
-    await writeFile(
-      join(root, "memory", "history.jsonl"),
-      `${JSON.stringify({
-        cursor: 1,
-        time: "2026-05-11T12:00:00.000Z",
-        fromEventCursor: 1,
-        toEventCursor: 10,
-        channelIds: ["c1"],
-        participants: ["u1"],
-        summary: "old useful context",
-        memoryTargets: ["memory/MEMORY.md"],
-      })}\n`,
-      "utf8",
+  it("limits response history to recent channel summaries and a capped transcript", async () => {
+    const input = await contextFixture(
+      Array.from({ length: 8 }, (_, index) => ({
+        ...createMessage(`m${index + 1}`),
+        cleanContent: `latest message ${index} ${"x".repeat(40)}`,
+      })),
     );
-    const config = {
-      ...defaultConfig,
-      context: {
-        ...defaultConfig.context,
-        maxTranscriptChars: 180,
-        maxArchiveSummariesInContext: 1,
-      },
-    };
-    const events = Array.from({ length: 8 }, (_, index) => {
-      const message = normalizedMessage(`m${index + 1}`);
-      return {
-        type: "message_create" as const,
-        time: message.createdAt,
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        authorId: message.author.id,
-        payload: { ...message, cleanContent: `latest message ${index} ${"x".repeat(40)}` },
-      };
-    });
+    const history = [
+      { cursor: 1, channelIds: ["c1"], summary: "old excluded summary" },
+      { cursor: 2, channelIds: ["c1"], summary: "recent useful context" },
+      { cursor: 3, channelIds: ["other-channel"], summary: "unrelated channel context" },
+    ].map((entry) => ({
+      ...entry,
+      time: "2026-05-11T12:00:00.000Z",
+      fromEventCursor: 1,
+      toEventCursor: 10,
+      participants: ["u1"],
+      memoryTargets: ["memory/MEMORY.md"],
+    }));
+    await writeWorkspaceFile(
+      input.workspaceRoot,
+      "memory/history.jsonl",
+      `${history.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    );
 
     const context = await buildResponseContext({
-      agentsPath,
-      workspaceRoot: root,
-      config,
-      events,
-      targetMessageIds: ["m8"],
-      task: {
-        engage: true,
-        confidence: 1,
-        reason: "direct",
-        targetMessageIds: ["m8"],
-        expectedRole: "answer_question",
+      ...input,
+      config: {
+        ...defaultConfig,
+        context: { ...defaultConfig.context, maxTranscriptChars: 180, maxArchiveSummariesInContext: 1 },
       },
-      botIdentity,
+      targetMessageIds: ["m8"],
+      task: { ...responseTask, targetMessageIds: ["m8"] },
     });
-    const userMessage = context.find((entry) => entry.role === "user")?.content ?? "";
+    const user = messageContent(context, "user");
 
-    expect(userMessage).toContain("<archive_summaries>");
-    expect(userMessage).toContain("old useful context");
-    expect(userMessage).toContain("... (truncated)");
+    expect(user).toContain("recent useful context");
+    expect(user).not.toContain("old excluded summary");
+    expect(user).not.toContain("unrelated channel context");
+    expect(user).toContain("... (truncated)");
   });
 });
 
-function normalizedMessage(
-  id: string,
-  userId = "u1",
-  displayName = "User",
-  isBot = false,
-): NormalizedDiscordMessage {
+async function contextFixture(messages = [createMessage()]) {
+  const workspaceRoot = await createTestWorkspace("dbh2-context-");
+  const agentsPath = join(workspaceRoot, "AGENTS.md");
+  await writeFile(agentsPath, "runtime instructions", "utf8");
   return {
-    id,
-    guildId: "g1",
-    channelId: "c1",
-    author: { id: userId, username: displayName, displayName, isBot },
-    content: "latest message",
-    cleanContent: "latest message",
-    createdAt: "2026-05-11T12:00:03.000Z",
-    mentions: [],
-    attachments: [],
-    embeds: [],
-    reactions: [],
-    links: [],
+    agentsPath,
+    workspaceRoot,
+    config: defaultConfig,
+    events: messages.map(createMessageEvent),
+    targetMessageIds: ["m1"],
+    task: responseTask,
+    botIdentity,
   };
+}
+
+async function writeWorkspaceFile(workspaceRoot: string, relativePath: string, content: string) {
+  const path = join(workspaceRoot, relativePath);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content, "utf8");
+}
+
+function messageContent(messages: AgentContextMessage[], role: AgentRole): string {
+  return messages.find((message) => message.role === role)?.content ?? "";
 }

@@ -1,12 +1,12 @@
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { assertInsideWorkspace, assertWritablePathInsideWorkspace } from "../src/paths/workspace-guard.js";
+import { createTestWorkspace } from "./helpers/workspace.js";
 
 describe("workspace guard", () => {
   it("allows paths inside the workspace", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-"));
+    const root = await createTestWorkspace();
     await writeFile(join(root, "MEMORY.md"), "ok", "utf8");
 
     const safe = await assertInsideWorkspace(root, "MEMORY.md");
@@ -15,22 +15,25 @@ describe("workspace guard", () => {
   });
 
   it("rejects parent traversal", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-"));
+    const root = await createTestWorkspace();
 
     await expect(assertInsideWorkspace(root, "../outside.txt")).rejects.toThrow(/escapes guild workspace/);
   });
 
   it("rejects symlink traversal outside the workspace", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-"));
-    const outside = await mkdtemp(join(tmpdir(), "dbh2-outside-"));
+    const root = await createTestWorkspace();
+    const outside = await createTestWorkspace("dbh2-outside-");
     await writeFile(join(outside, "secret.txt"), "secret", "utf8");
     await symlink(outside, join(root, "link"));
 
     await expect(assertInsideWorkspace(root, "link/secret.txt")).rejects.toThrow(/escapes guild workspace/);
+    await expect(assertWritablePathInsideWorkspace(root, "link/new.txt")).rejects.toThrow(
+      /escapes guild workspace/,
+    );
   });
 
   it("checks new file parent directories before writes", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh2-"));
+    const root = await createTestWorkspace();
     await mkdir(join(root, "memory"));
 
     await expect(assertWritablePathInsideWorkspace(root, "memory/new.txt")).resolves.toContain("new.txt");

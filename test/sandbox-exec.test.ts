@@ -3,27 +3,32 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../src/config.js";
 import { runDirect } from "../src/tools/bwrap.js";
 import { sandboxExec } from "../src/tools/sandbox-exec.js";
-import type { AppConfig, ToolContext } from "../src/types.js";
 
-const WORKSPACE = tmpdir();
-
-const context: ToolContext = {
-  guildId: "test-guild",
-  workspaceRoot: WORKSPACE,
+const processOptions = {
+  workspaceRoot: tmpdir(),
+  timeoutMs: 5000,
+  outputLimitBytes: 65536,
+};
+const context = { guildId: "test-guild", workspaceRoot: processOptions.workspaceRoot };
+const directConfig = {
+  ...defaultConfig,
+  sandbox: {
+    ...defaultConfig.sandbox,
+    enabled: false,
+    timeoutMs: processOptions.timeoutMs,
+    outputLimitBytes: processOptions.outputLimitBytes,
+  },
 };
 
-function makeConfig(enabled: boolean): AppConfig {
-  return {
-    ...defaultConfig,
-    sandbox: { ...defaultConfig.sandbox, enabled, timeoutMs: 5000, outputLimitBytes: 65536 },
-  };
+function runCommand(argv: string[], options: Partial<typeof processOptions> = {}) {
+  return runDirect({ ...processOptions, ...options, argv });
 }
 
-describe("runDirect", () => {
-  it("rejects empty argv", async () => {
-    await expect(
-      runDirect({ workspaceRoot: WORKSPACE, argv: [], timeoutMs: 5000, outputLimitBytes: 65536 }),
-    ).rejects.toThrow("argv must not be empty");
+afterEach(() => vi.unstubAllEnvs());
+
+describe("direct process execution", () => {
+  it("rejects empty commands", async () => {
+    await expect(runCommand([])).rejects.toThrow(/argv must not be empty/);
   });
 
   it.each([
@@ -37,93 +42,53 @@ describe("runDirect", () => {
     "powershell.exe",
     "pwsh",
     "pwsh.exe",
-  ])("blocks shell interpreter: %s", async (shell) => {
-    await expect(
-      runDirect({
-        workspaceRoot: WORKSPACE,
-        argv: [shell, "-c", "echo hi"],
-        timeoutMs: 5000,
-        outputLimitBytes: 65536,
-      }),
-    ).rejects.toThrow(`shell interpreters are not allowed (${shell})`);
+    "/bin/bash",
+  ])("blocks shell interpreter %s", async (shell) => {
+    await expect(runCommand([shell, "-c", "echo hi"])).rejects.toThrow(/shell interpreters are not allowed/);
   });
 
-  it("blocks shell by full path", async () => {
-    await expect(
-      runDirect({
-        workspaceRoot: WORKSPACE,
-        argv: ["/bin/bash", "-c", "echo hi"],
-        timeoutMs: 5000,
-        outputLimitBytes: 65536,
-      }),
-    ).rejects.toThrow("shell interpreters are not allowed (bash)");
-  });
+  it("returns command output and a successful exit status", async () => {
+    const result = await runCommand(["echo", "hello"]);
 
-  it("runs echo and captures stdout", async () => {
-    const result = await runDirect({
-      workspaceRoot: WORKSPACE,
-      argv: ["echo", "hello"],
-      timeoutMs: 5000,
-      outputLimitBytes: 65536,
-    });
-    expect(result.exitCode).toBe(0);
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false });
     expect(result.stdout.trim()).toBe("hello");
-    expect(result.timedOut).toBe(false);
   });
 
-  it("reports non-zero exit code", async () => {
-    const result = await runDirect({
-      workspaceRoot: WORKSPACE,
-      argv: ["false"],
-      timeoutMs: 5000,
-      outputLimitBytes: 65536,
-    });
+  it("returns a command's failed exit status", async () => {
+    const result = await runCommand(["false"]);
+
     expect(result.exitCode).not.toBe(0);
   });
 
-  it("kills process on timeout and sets timedOut", async () => {
-    const result = await runDirect({
-      workspaceRoot: WORKSPACE,
-      argv: ["sleep", "10"],
-      timeoutMs: 200,
-      outputLimitBytes: 65536,
-    });
+  it("terminates a command that exceeds its timeout", async () => {
+    const result = await runCommand(["sleep", "10"], { timeoutMs: 200 });
+
     expect(result.timedOut).toBe(true);
   });
 
-  it("does not pass sensitive env vars to child process", async () => {
+  it("passes safe environment variables while excluding secrets", async () => {
     vi.stubEnv("MY_TOKEN", "super-secret");
     vi.stubEnv("SAFE_VAR", "safe-value");
 
-    const result = await runDirect({
-      workspaceRoot: WORKSPACE,
-      argv: ["env"],
-      timeoutMs: 5000,
-      outputLimitBytes: 65536,
-    });
+    const result = await runCommand(["env"]);
 
     expect(result.stdout).not.toContain("MY_TOKEN");
     expect(result.stdout).not.toContain("super-secret");
     expect(result.stdout).toContain("SAFE_VAR=safe-value");
-
-    vi.unstubAllEnvs();
   });
 });
 
-describe("sandboxExec with sandbox.enabled: false", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+describe("sandbox disabled", () => {
+  it("executes a permitted command directly", async () => {
+    const result = await sandboxExec(context, directConfig, { argv: ["echo", "direct"] });
 
-  it("runs directly without bwrap when disabled", async () => {
-    const result = await sandboxExec(context, makeConfig(false), { argv: ["echo", "direct"] });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("direct");
   });
 
-  it("blocks shell interpreters even when sandbox is disabled", async () => {
-    await expect(
-      sandboxExec(context, makeConfig(false), { argv: ["bash", "-c", "echo hi"] }),
-    ).rejects.toThrow("shell interpreters are not allowed");
+  it("continues to block shell interpreters", async () => {
+    await expect(sandboxExec(context, directConfig, { argv: ["bash", "-c", "echo hi"] })).rejects.toThrow(
+      /shell interpreters are not allowed/,
+    );
   });
 });

@@ -1,41 +1,32 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadDotenvFile } from "../src/env.js";
+import { createTestWorkspace } from "./helpers/workspace.js";
 
 describe("dotenv loading", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("loads an existing dotenv file without overriding existing environment variables", async () => {
-    const root = await mkdtemp(join(tmpdir(), "dbh-env-"));
+    const root = await createTestWorkspace("dbh-env-");
     const envPath = join(root, ".env");
     const existingKey = "DBH_DOTENV_EXISTING";
     const loadedKey = "DBH_DOTENV_LOADED";
-    const previousExisting = process.env[existingKey];
-    const previousLoaded = process.env[loadedKey];
-    process.env[existingKey] = "from-process";
+    vi.stubEnv(existingKey, "from-process");
+    vi.stubEnv(loadedKey, undefined);
 
-    try {
-      await writeFile(envPath, `${existingKey}=from-dotenv\n${loadedKey}=loaded\n`, "utf8");
+    await writeFile(envPath, `${existingKey}=from-dotenv\n${loadedKey}=loaded\n`, "utf8");
 
-      expect(loadDotenvFile(envPath)).toBe(true);
-      expect(process.env[existingKey]).toBe("from-process");
-      expect(process.env[loadedKey]).toBe("loaded");
-    } finally {
-      if (previousExisting === undefined) {
-        delete process.env[existingKey];
-      } else {
-        process.env[existingKey] = previousExisting;
-      }
-      if (previousLoaded === undefined) {
-        delete process.env[loadedKey];
-      } else {
-        process.env[loadedKey] = previousLoaded;
-      }
-      await rm(root, { recursive: true, force: true });
-    }
+    expect(loadDotenvFile(envPath)).toBe(true);
+    expect(process.env[existingKey]).toBe("from-process");
+    expect(process.env[loadedKey]).toBe("loaded");
   });
 
-  it("skips missing dotenv files", () => {
-    expect(loadDotenvFile(join(tmpdir(), "missing-discord-bot-become-human-2.env"))).toBe(false);
+  it("skips missing dotenv files", async () => {
+    const root = await createTestWorkspace("dbh-env-");
+
+    expect(loadDotenvFile(join(root, ".env"))).toBe(false);
   });
 });

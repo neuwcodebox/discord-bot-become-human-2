@@ -1,76 +1,68 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadCodexCredentials } from "../src/agent/provider.js";
+import { createTestWorkspace } from "./helpers/workspace.js";
 
-vi.mock("@earendil-works/pi-ai/providers/openai-codex", () => {
-  return {
-    openaiCodexProvider: () => ({
-      auth: {
-        oauth: {
-          refresh: vi.fn(async () => ({
-            type: "oauth",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          })),
-          toAuth: vi.fn(async (credential: { access: string }) => ({ apiKey: credential.access })),
-        },
+vi.mock("@earendil-works/pi-ai/providers/openai-codex", () => ({
+  openaiCodexProvider: () => ({
+    auth: {
+      oauth: {
+        refresh: async () => ({
+          type: "oauth",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        }),
+        toAuth: async (credential: { access: string }) => ({ apiKey: credential.access }),
+      },
+    },
+  }),
+}));
+
+async function writeExpiredCredentials(path: string): Promise<void> {
+  await writeFile(
+    path,
+    JSON.stringify({
+      "openai-codex": {
+        type: "oauth",
+        access: "old-access",
+        refresh: "refresh-token",
+        expires: 1,
       },
     }),
-  };
-});
+    "utf8",
+  );
+}
 
 describe("codex auth loading", () => {
   const cwd = process.cwd();
+  let root = "";
+
+  beforeEach(async () => {
+    root = await createTestWorkspace("dbh2-auth-");
+    process.chdir(root);
+  });
 
   afterEach(() => {
     process.chdir(cwd);
-    vi.restoreAllMocks();
   });
 
   it("loads and refreshes pi-ai OAuth credentials from the configured codex auth path", async () => {
-    const temp = await mkdtemp(join(tmpdir(), "dbh2-auth-"));
-    process.chdir(temp);
-    const authPath = join(temp, "codex-auth.json");
-    await writeFile(
-      authPath,
-      JSON.stringify({
-        "openai-codex": {
-          type: "oauth",
-          access: "old-access",
-          refresh: "refresh-token",
-          expires: 1,
-        },
-      }),
-      "utf8",
-    );
-    const { loadCodexCredentials } = await import("../src/agent/provider.js");
+    const authPath = join(root, "codex-auth.json");
+    await writeExpiredCredentials(authPath);
 
     const credentials = await loadCodexCredentials(authPath);
 
     expect(credentials.apiKey).toBe("access-token");
-    await expect(readFile(authPath, "utf8")).resolves.toContain("access-token");
+    const stored: unknown = JSON.parse(await readFile(authPath, "utf8"));
+    expect(stored).toMatchObject({ "openai-codex": { access: "access-token" } });
   });
 
   it("does not read pi-ai auth.json from the current working directory", async () => {
-    const temp = await mkdtemp(join(tmpdir(), "dbh2-auth-"));
-    process.chdir(temp);
-    await writeFile(
-      join(temp, "auth.json"),
-      JSON.stringify({
-        "openai-codex": {
-          type: "oauth",
-          access: "old-access",
-          refresh: "refresh-token",
-          expires: 1,
-        },
-      }),
-      "utf8",
-    );
-    const { loadCodexCredentials } = await import("../src/agent/provider.js");
+    await writeExpiredCredentials(join(root, "auth.json"));
 
-    const credentials = await loadCodexCredentials(join(temp, "missing-codex-auth.json"));
+    const credentials = await loadCodexCredentials(join(root, "missing-codex-auth.json"));
 
     expect(credentials.apiKey).toBeUndefined();
   });

@@ -1,11 +1,8 @@
-import type { ToolContext } from "../types.js";
+import type { AttachmentCache } from "../discord/attachment-cache.js";
+import type { DiscordActionRuntime } from "./discord-actions.js";
 
-export type RuntimeTool<
-  TArgs extends Record<string, unknown> = Record<string, unknown>,
-  TResult = unknown,
-> = {
-  name: string;
-  description: string;
-  parameters: unknown;
-  execute: (args: TArgs, context: ToolContext) => Promise<TResult>;
+export type ToolIntegrations = {
+  discordActions?: DiscordActionRuntime;
+  attachmentCache?: AttachmentCache;
+  writePolicy?: (path: string) => void;
 };

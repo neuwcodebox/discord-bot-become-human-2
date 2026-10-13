@@ -1,91 +1,83 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../src/config.js";
 import { checkReplyHardGates } from "../src/conversation/reply-cadence.js";
-import type { ConversationRuntimeState, NormalizedDiscordMessage } from "../src/types.js";
+import type { ConversationRuntimeState } from "../src/types.js";
+import { createMessage } from "./helpers/conversation.js";
+
+const now = new Date("2026-05-11T12:00:00.000Z");
 
 describe("reply cadence gates", () => {
-  it("keeps the long unprompted gate available for true unprompted replies", () => {
-    const state = stateAfterBotReply(30);
-    const result = checkReplyHardGates(defaultConfig, state, message("m1", "hello"), {
-      unprompted: true,
-    });
-
-    expect(result).toEqual({ allowed: false, reason: "minSecondsBetweenUnpromptedReplies gate" });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
   });
+  afterEach(() => vi.useRealTimers());
 
-  it("allows engaged human follow-up messages after the short reply interval", () => {
-    const state = stateAfterBotReply(30);
-    const result = checkReplyHardGates(defaultConfig, state, message("m1", "follow up"), {
-      unprompted: false,
-    });
+  it.each([
+    { unprompted: true, allowed: false },
+    { unprompted: false, allowed: true },
+  ])(
+    "allows=$allowed for an unprompted=$unprompted reply after the short interval",
+    ({ unprompted, allowed }) => {
+      const result = checkReplyHardGates(defaultConfig, stateAfterBotReply(30), createMessage(), {
+        unprompted,
+      });
 
-    expect(result).toEqual({ allowed: true });
-  });
+      expect(result.allowed).toBe(allowed);
+    },
+  );
 
-  it("can allow engaged follow-up messages during cooldown so stay decision can decide", () => {
-    const state = stateAfterBotReply(6);
-    state.cooldownUntil = new Date(Date.now() + 20_000).toISOString();
+  it.each([
+    { unprompted: false, bypassCooldown: true, allowed: true },
+    { unprompted: true, bypassCooldown: false, allowed: false },
+  ])(
+    "allows=$allowed during cooldown for an unprompted=$unprompted reply",
+    ({ unprompted, bypassCooldown, allowed }) => {
+      const state = stateAfterBotReply(6);
+      state.cooldownUntil = new Date(now.getTime() + 20_000).toISOString();
 
-    const result = checkReplyHardGates(defaultConfig, state, message("m1", "say more"), {
-      unprompted: false,
-      allowDuringCooldown: true,
-      allowBeforeMinReplyInterval: true,
-    });
+      const result = checkReplyHardGates(defaultConfig, state, createMessage(), {
+        unprompted,
+        allowDuringCooldown: bypassCooldown,
+        allowBeforeMinReplyInterval: bypassCooldown,
+      });
 
-    expect(result).toEqual({ allowed: true });
-  });
+      expect(result.allowed).toBe(allowed);
+    },
+  );
 
-  it("still blocks true unprompted replies during cooldown", () => {
-    const state = stateAfterBotReply(6);
-    state.cooldownUntil = new Date(Date.now() + 20_000).toISOString();
-
-    const result = checkReplyHardGates(defaultConfig, state, message("m1", "background"), {
-      unprompted: true,
-    });
-
-    expect(result).toEqual({ allowed: false, reason: "cooldownUntil is active" });
-  });
-
-  it("recognizes explicit bot mentions when checking consecutive reply gates", () => {
+  it("allows an explicit bot mention after the consecutive reply limit", () => {
     const state = stateAfterBotReply(120);
     state.consecutiveBotReplies = defaultConfig.conversation.engaged.maxConsecutiveBotReplies;
 
-    const result = checkReplyHardGates(defaultConfig, state, message("m1", "<@bot-1>", ["bot-1"]), {
-      unprompted: false,
-      botUserId: "bot-1",
-      botNames: ["bot"],
-    });
+    const result = checkReplyHardGates(
+      defaultConfig,
+      state,
+      createMessage("m1", {
+        content: "<@bot-1>",
+        cleanContent: "<@bot-1>",
+        mentions: [{ id: "bot-1", displayName: "bot" }],
+      }),
+      {
+        unprompted: false,
+        botUserId: "bot-1",
+        botNames: ["bot"],
+      },
+    );
 
-    expect(result).toEqual({ allowed: true });
+    expect(result.allowed).toBe(true);
   });
 });
 
 function stateAfterBotReply(secondsAgo: number): ConversationRuntimeState {
   return {
     engagement: "engaged",
-    lastBotMessageAt: new Date(Date.now() - secondsAgo * 1000).toISOString(),
-    lastHumanMessageAt: new Date().toISOString(),
+    lastBotMessageAt: new Date(now.getTime() - secondsAgo * 1000).toISOString(),
+    lastHumanMessageAt: now.toISOString(),
     recentBotMessageIds: ["bot-message"],
     consecutiveBotReplies: 0,
     humanMessagesSinceLastBot: 1,
     unrelatedHumanMessagesSinceLastBot: 0,
     ambientReplyTimes: [],
-  };
-}
-
-function message(id: string, cleanContent: string, mentionIds: string[] = []): NormalizedDiscordMessage {
-  return {
-    id,
-    guildId: "g",
-    channelId: "c",
-    author: { id: "u1", username: "u1", displayName: "User", isBot: false },
-    content: cleanContent,
-    cleanContent,
-    createdAt: new Date().toISOString(),
-    mentions: mentionIds.map((mentionId) => ({ id: mentionId, displayName: mentionId })),
-    attachments: [],
-    embeds: [],
-    reactions: [],
-    links: [],
   };
 }

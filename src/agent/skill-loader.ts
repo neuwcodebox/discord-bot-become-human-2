@@ -1,12 +1,17 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { parseDocument } from "yaml";
+import { z } from "zod";
+import { readDirectoryIfExists, readTextIfExists } from "../storage/files.js";
 
-export type SkillMetadata = {
-  name: string;
-  description: string;
+const skillMetadataSchema = z.object({
+  name: z.string().catch(""),
+  description: z.string().catch(""),
+  always: z.boolean().optional().catch(undefined),
+});
+
+export type SkillMetadata = z.infer<typeof skillMetadataSchema> & {
   path: string;
-  always?: boolean;
 };
 
 export type LoadedSkill = SkillMetadata & {
@@ -23,29 +28,19 @@ export class SkillLoader {
 
   async discover(): Promise<SkillMetadata[]> {
     const skillsRoot = join(this.workspaceRoot, "skills");
-    let entries: string[];
-    try {
-      entries = await readdir(skillsRoot);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
-    }
+    const entries = await readDirectoryIfExists(skillsRoot);
     const skills: SkillMetadata[] = [];
     for (const entry of entries) {
       const skillPath = join(skillsRoot, entry, "SKILL.md");
-      try {
-        const raw = await readFile(skillPath, "utf8");
-        const { metadata } = parseSkillMarkdown(raw);
-        if (!metadata.name || !metadata.description) continue;
-        skills.push({
-          name: metadata.name,
-          description: metadata.description,
-          path: skillPath,
-          ...(metadata.always === undefined ? {} : { always: metadata.always }),
-        });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
+      const raw = await readTextIfExists(skillPath);
+      const metadata = parseSkillMetadata(raw);
+      if (!metadata?.name || !metadata.description) continue;
+      skills.push({
+        name: metadata.name,
+        description: metadata.description,
+        path: skillPath,
+        ...(metadata.always === undefined ? {} : { always: metadata.always }),
+      });
     }
     return skills.sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -54,12 +49,7 @@ export class SkillLoader {
     const wanted = new Set(names);
     const discovered = await this.discover();
     const selected = discovered.filter((skill) => wanted.has(skill.name) || skill.always);
-    return Promise.all(
-      selected.map(async (skill) => ({
-        ...skill,
-        body: stripFrontmatter(await readFile(skill.path, "utf8")),
-      })),
-    );
+    return Promise.all(selected.map(loadSkill));
   }
 
   async buildSkillsContext(): Promise<SkillsContext> {
@@ -67,12 +57,7 @@ export class SkillLoader {
     const alwaysSkills = discovered.filter((s) => s.always === true);
     const otherSkills = discovered.filter((s) => s.always !== true);
 
-    const alwaysLoaded: LoadedSkill[] = await Promise.all(
-      alwaysSkills.map(async (skill) => ({
-        ...skill,
-        body: stripFrontmatter(await readFile(skill.path, "utf8")),
-      })),
-    );
+    const alwaysLoaded = await Promise.all(alwaysSkills.map(loadSkill));
 
     const summary = otherSkills
       .map((s) => `- **${s.name}** — ${s.description}  \`${relative(this.workspaceRoot, s.path)}\``)
@@ -82,31 +67,26 @@ export class SkillLoader {
   }
 }
 
-function parseSkillMarkdown(raw: string): {
-  metadata: { name?: string; description?: string; always?: boolean };
-} {
-  const normalized = raw.replace(/\r\n/g, "\n");
-  if (!normalized.startsWith("---\n")) return { metadata: {} };
-  const end = normalized.indexOf("\n---", 4);
-  if (end === -1) return { metadata: {} };
-  const yaml = normalized.slice(4, end);
-  const parsed = parseDocument(yaml).toJSON() as {
-    name?: unknown;
-    description?: unknown;
-    always?: unknown;
-  } | null;
-  const metadata: { name?: string; description?: string; always?: boolean } = {};
-  if (typeof parsed?.name === "string") metadata.name = parsed.name;
-  if (typeof parsed?.description === "string") metadata.description = parsed.description;
-  if (typeof parsed?.always === "boolean") metadata.always = parsed.always;
-  return { metadata };
+async function loadSkill(skill: SkillMetadata): Promise<LoadedSkill> {
+  return { ...skill, body: splitSkillMarkdown(await readFile(skill.path, "utf8")).body };
 }
 
-function stripFrontmatter(raw: string): string {
+function parseSkillMetadata(raw: string): z.infer<typeof skillMetadataSchema> | undefined {
+  const { frontmatter } = splitSkillMarkdown(raw);
+  if (frontmatter === undefined) return undefined;
+  const parsed: unknown = parseDocument(frontmatter).toJSON();
+  const result = skillMetadataSchema.safeParse(parsed);
+  return result.success ? result.data : undefined;
+}
+
+function splitSkillMarkdown(raw: string): { frontmatter?: string; body: string } {
   const normalized = raw.replace(/\r\n/g, "\n");
-  if (!normalized.startsWith("---\n")) return raw;
+  if (!normalized.startsWith("---\n")) return { body: raw };
   const end = normalized.indexOf("\n---", 4);
-  if (end === -1) return raw;
+  if (end === -1) return { body: raw };
   const after = normalized.slice(end + 4);
-  return (after.startsWith("\n") ? after.slice(1) : after).trimStart();
+  return {
+    frontmatter: normalized.slice(4, end),
+    body: (after.startsWith("\n") ? after.slice(1) : after).trimStart(),
+  };
 }

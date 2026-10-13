@@ -1,42 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AttachmentCache } from "../src/discord/attachment-cache.js";
 import { readAttachmentToolContent } from "../src/tools/attachment.js";
+import { createMessage } from "./helpers/conversation.js";
 
 describe("attachment tool", () => {
   afterEach(() => {
-    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("returns provider image content for image attachments", async () => {
     const cache = new AttachmentCache();
-    cache.remember({
-      id: "m1",
-      guildId: "g",
-      channelId: "c",
-      author: { id: "u", username: "u", displayName: "u", isBot: false },
-      content: "",
-      cleanContent: "",
-      createdAt: "2026-05-10T12:00:00.000Z",
-      mentions: [],
-      attachments: [
-        {
-          id: "a1",
-          url: "https://cdn.example/image.png",
-          filename: "image.png",
-          mimeType: "image/png",
-          size: 4,
-          kind: "image",
-        },
-      ],
-      embeds: [],
-      reactions: [],
-      links: [],
-    });
+    cache.remember(
+      createMessage("m1", {
+        attachments: [
+          {
+            id: "a1",
+            url: "https://cdn.example/image.png",
+            filename: "image.png",
+            mimeType: "image/png",
+            size: 4,
+            kind: "image",
+          },
+        ],
+      }),
+    );
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () => new Response(new Uint8Array([1, 2, 3, 4]), { headers: { "content-type": "image/png" } }),
-      ),
+      async () => new Response(new Uint8Array([1, 2, 3, 4]), { headers: { "content-type": "image/png" } }),
     );
 
     const result = await readAttachmentToolContent(cache, { ref: "attachment://a1" });
@@ -56,32 +46,23 @@ describe("attachment tool", () => {
 
   it("reports truncation metadata for attachment reads", async () => {
     const cache = new AttachmentCache();
-    cache.remember({
-      id: "m1",
-      guildId: "g",
-      channelId: "c",
-      author: { id: "u", username: "u", displayName: "u", isBot: false },
-      content: "",
-      cleanContent: "",
-      createdAt: "2026-05-10T12:00:00.000Z",
-      mentions: [],
-      attachments: [
-        {
-          id: "a1",
-          url: "https://cdn.example/log.txt",
-          filename: "log.txt",
-          mimeType: "text/plain",
-          size: 10,
-          kind: "file",
-        },
-      ],
-      embeds: [],
-      reactions: [],
-      links: [],
-    });
+    cache.remember(
+      createMessage("m1", {
+        attachments: [
+          {
+            id: "a1",
+            url: "https://cdn.example/log.txt",
+            filename: "log.txt",
+            mimeType: "text/plain",
+            size: 10,
+            kind: "file",
+          },
+        ],
+      }),
+    );
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("abcdefghij", { headers: { "content-type": "text/plain" } })),
+      async () => new Response("abcdefghij", { headers: { "content-type": "text/plain" } }),
     );
 
     const result = await readAttachmentToolContent(cache, { ref: "attachment://a1", maxBytes: 4 });

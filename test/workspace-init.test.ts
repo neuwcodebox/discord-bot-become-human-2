@@ -1,20 +1,14 @@
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { defaultConfig } from "../src/config.js";
 import { createRuntimePaths, getGuildWorkspace } from "../src/paths/runtime-paths.js";
 import { ensureGuildWorkspace, ensureRuntimeRoot, ensureUserProfile } from "../src/paths/workspace-init.js";
+import { createTestWorkspace } from "./helpers/workspace.js";
 
 describe("workspace init", () => {
   it("creates runtime root and guild workspace without copying resources AGENTS.md", async () => {
-    const temp = await mkdtemp(join(tmpdir(), "dbh2-"));
-    const projectRoot = resolve(".");
-    const config = {
-      ...defaultConfig,
-      runtime: { ...defaultConfig.runtime, rootDir: temp },
-    };
-    const paths = createRuntimePaths(projectRoot, config);
+    const paths = await createRuntimeFixture();
     await ensureRuntimeRoot(paths);
     const workspace = getGuildWorkspace(paths, "guild-a");
     await ensureGuildWorkspace(paths, workspace);
@@ -29,15 +23,9 @@ describe("workspace init", () => {
   });
 
   it("keeps user profiles scoped to each guild workspace", async () => {
-    const temp = await mkdtemp(join(tmpdir(), "dbh2-"));
-    const projectRoot = resolve(".");
-    const config = { ...defaultConfig, runtime: { ...defaultConfig.runtime, rootDir: temp } };
-    const paths = createRuntimePaths(projectRoot, config);
+    const paths = await createRuntimeFixture();
     const guildA = getGuildWorkspace(paths, "a");
     const guildB = getGuildWorkspace(paths, "b");
-    await ensureGuildWorkspace(paths, guildA);
-    await ensureGuildWorkspace(paths, guildB);
-
     await ensureUserProfile(guildA.workspaceRoot, { id: "123", username: "neuw", displayName: "A name" });
     await ensureUserProfile(guildB.workspaceRoot, { id: "123", username: "neuw", displayName: "B name" });
 
@@ -50,12 +38,8 @@ describe("workspace init", () => {
   });
 
   it("does not create USER.md for bot authors", async () => {
-    const temp = await mkdtemp(join(tmpdir(), "dbh2-"));
-    const projectRoot = resolve(".");
-    const config = { ...defaultConfig, runtime: { ...defaultConfig.runtime, rootDir: temp } };
-    const paths = createRuntimePaths(projectRoot, config);
+    const paths = await createRuntimeFixture();
     const workspace = getGuildWorkspace(paths, "a");
-    await ensureGuildWorkspace(paths, workspace);
 
     await ensureUserProfile(workspace.workspaceRoot, {
       id: "bot-1",
@@ -71,3 +55,12 @@ describe("workspace init", () => {
     });
   });
 });
+
+async function createRuntimeFixture() {
+  const root = await createTestWorkspace("dbh2-workspace-");
+  const config = { ...defaultConfig, runtime: { ...defaultConfig.runtime, rootDir: root } };
+  return {
+    ...createRuntimePaths(resolve("."), config),
+    codexAuthPath: join(root, "codex-auth.json"),
+  };
+}

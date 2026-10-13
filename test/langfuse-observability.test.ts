@@ -1,8 +1,10 @@
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   createLangfuseAgentObserver,
   type LangfuseAgentClient,
+  type LangfuseAgentObserverOptions,
   type LangfuseEventBody,
   type LangfuseGeneration,
   type LangfuseGenerationEndBody,
@@ -18,6 +20,7 @@ type ToolResultContent = Extract<AgentMessage, { role: "toolResult" }>["content"
 class FakeSpan implements LangfuseSpan {
   readonly events: LangfuseEventBody[] = [];
   ended?: LangfuseSpanEndBody;
+  endCount = 0;
 
   constructor(
     readonly id: string,
@@ -30,6 +33,7 @@ class FakeSpan implements LangfuseSpan {
   }
 
   end(body?: LangfuseSpanEndBody): unknown {
+    this.endCount += 1;
     if (body !== undefined) this.ended = body;
     return this;
   }
@@ -37,6 +41,7 @@ class FakeSpan implements LangfuseSpan {
 
 class FakeGeneration implements LangfuseGeneration {
   ended?: LangfuseGenerationEndBody;
+  endCount = 0;
 
   constructor(
     readonly id: string,
@@ -44,6 +49,7 @@ class FakeGeneration implements LangfuseGeneration {
   ) {}
 
   end(body?: LangfuseGenerationEndBody): unknown {
+    this.endCount += 1;
     if (body !== undefined) this.ended = body;
     return this;
   }
@@ -52,7 +58,7 @@ class FakeGeneration implements LangfuseGeneration {
 class FakeTrace implements LangfuseTrace {
   readonly spans: FakeSpan[] = [];
   readonly generations: FakeGeneration[] = [];
-  updates: Array<Parameters<LangfuseTrace["update"]>[0]> = [];
+  readonly updates: Array<Parameters<LangfuseTrace["update"]>[0]> = [];
   endCount = 0;
 
   constructor(
@@ -100,19 +106,14 @@ class FakeLangfuse implements LangfuseAgentClient {
 
 describe("langfuse observability", () => {
   it("records assistant generations before repeated tool spans in pi-agent event order", async () => {
-    const langfuse = new FakeLangfuse();
-    const observer = createLangfuseAgentObserver({
-      langfuse,
+    const { observer, trace } = createObserver({
       traceLabel: "response",
       sessionId: "session-1",
-      model: "gpt-test",
-      provider: "openai",
       inputMessages: [
         { role: "system", content: "runtime policy" },
         { role: "user", content: "conversation transcript" },
         { role: "user", content: "please use tools" },
       ],
-      startedAt: 1000,
     });
 
     await observer.handleEvent({ type: "message_start", message: assistantMessage([]) });
@@ -137,45 +138,42 @@ describe("langfuse observability", () => {
       ],
     });
 
-    const trace = langfuse.traces[0];
     const expectedInput = [
       { role: "system", content: "runtime policy", contentLength: 14 },
       { role: "user", content: "conversation transcript", contentLength: 23 },
       { role: "user", content: "please use tools", contentLength: 16 },
     ];
-    expect(trace?.body?.input).toEqual(expectedInput);
-    expect(trace?.generations).toHaveLength(1);
-    expect(trace?.spans).toHaveLength(2);
-    expect(trace?.generations[0]?.body.input).toEqual(expectedInput);
-    expect(trace?.generations[0]?.body.input).not.toBe("please use tools");
-    expect(trace?.generations[0]?.body.metadata).toMatchObject({ eventOrder: 1 });
-    expect(trace?.generations[0]?.ended?.output).toMatchObject({
+    expect(trace.body.input).toEqual(expectedInput);
+    expect(trace.generations).toHaveLength(1);
+    expect(trace.spans).toHaveLength(2);
+    const generation = required(trace.generations[0], "assistant generation");
+    const firstTool = required(trace.spans[0], "first tool span");
+    const secondTool = required(trace.spans[1], "second tool span");
+    const generationEnd = required(generation.ended, "completed assistant generation");
+    expect(generation.body.input).toEqual(expectedInput);
+    expect(observationOrder(generation)).toBeLessThan(observationOrder(firstTool));
+    expect(observationOrder(firstTool)).toBeLessThan(observationOrder(secondTool));
+    expect(parseToolCallOutput(generationEnd.output)).toEqual({
       text: "checking",
       toolCalls: [
-        { id: "call-1", name: "workspace_read", arguments: '{\n  "path": "a.txt"\n}' },
-        { id: "call-2", name: "workspace_search", arguments: '{\n  "query": "needle"\n}' },
+        { id: "call-1", name: "workspace_read", arguments: { path: "a.txt" } },
+        { id: "call-2", name: "workspace_search", arguments: { query: "needle" } },
       ],
     });
-    expect(trace?.generations[0]?.ended?.metadata).toMatchObject({
+    expect(generationEnd.metadata).toMatchObject({
       toolCallCount: 2,
       toolCallNames: ["workspace_read", "workspace_search"],
     });
-    expect(trace?.generations[0]?.ended?.output).not.toBe("");
-    expect(trace?.spans[0]?.body.metadata).toMatchObject({ toolCallId: "call-1", eventOrder: 3 });
-    expect(trace?.spans[1]?.body.metadata).toMatchObject({ toolCallId: "call-2", eventOrder: 5 });
-    expect(trace?.spans[0]?.ended?.output).toBe("alpha");
-    expect(trace?.spans[1]?.ended?.output).toBe("beta");
+    expect(firstTool.body.metadata).toMatchObject({ toolCallId: "call-1" });
+    expect(secondTool.body.metadata).toMatchObject({ toolCallId: "call-2" });
+    expect(required(firstTool.ended, "completed first tool span").output).toBe("alpha");
+    expect(required(secondTool.ended, "completed second tool span").output).toBe("beta");
   });
 
   it("captures tool updates, tool errors, usage/cost details, and evaluation scores", async () => {
-    const langfuse = new FakeLangfuse();
-    const observer = createLangfuseAgentObserver({
-      langfuse,
+    const { langfuse, observer, trace } = createObserver({
       sessionId: "session-2",
-      model: "gpt-test",
-      provider: "openai",
       inputMessages: [{ role: "user", content: "search with token" }],
-      startedAt: 1000,
     });
     const longOutput = `done ${"x".repeat(2500)}`;
     const finalMessage = assistantMessage([{ type: "text", text: longOutput }]);
@@ -216,34 +214,32 @@ describe("langfuse observability", () => {
       ],
     });
 
-    const trace = langfuse.traces[0];
-    const generation = trace?.generations[0];
-    const span = trace?.spans[0];
-    expect(generation?.ended).toMatchObject({
+    const generation = required(trace.generations[0], "assistant generation");
+    const span = required(trace.spans[0], "tool span");
+    expect(generation.ended).toMatchObject({
       output: longOutput,
       usageDetails: { input: 10, output: 4, total: 14 },
       costDetails: { input: 0.01, output: 0.02, total: 0.03 },
     });
-    expect(String(generation?.ended?.output)).not.toContain("(truncated)");
-    expect(span?.body.input).toContain("[REDACTED]");
-    expect(span?.events).toHaveLength(1);
-    expect(span?.ended).toMatchObject({
+    expect(parseJson(span.body.input)).toEqual({ query: "x", apiToken: "[REDACTED]" });
+    expect(span.events).toEqual([expect.objectContaining({ name: "tool_update", output: "partial" })]);
+    expect(span.ended).toMatchObject({
       level: "ERROR",
       statusMessage: "network unavailable",
       output: "network unavailable",
     });
     expect(langfuse.scores).toEqual(
       expect.arrayContaining([
-        { name: "tool_is_error", value: 1, traceId: "trace-1", observationId: "span-1" },
-        { name: "tool_call_count", value: 1, traceId: "trace-1" },
-        { name: "turn_count", value: 1, traceId: "trace-1" },
-        { name: "total_tool_errors", value: 1, traceId: "trace-1" },
-        { name: "tool_success_rate", value: 0, traceId: "trace-1" },
-        { name: "session_had_errors", value: 1, traceId: "trace-1" },
+        { name: "tool_is_error", value: 1, traceId: trace.id, observationId: span.id },
+        { name: "tool_call_count", value: 1, traceId: trace.id },
+        { name: "turn_count", value: 1, traceId: trace.id },
+        { name: "total_tool_errors", value: 1, traceId: trace.id },
+        { name: "tool_success_rate", value: 0, traceId: trace.id },
+        { name: "session_had_errors", value: 1, traceId: trace.id },
       ]),
     );
     expect(langfuse.scores.some((score) => score.name.includes("token"))).toBe(false);
-    expect(trace?.updates[0]).toMatchObject({
+    expect(trace.updates[0]).toMatchObject({
       output: longOutput,
       metadata: {
         completed: true,
@@ -256,12 +252,8 @@ describe("langfuse observability", () => {
   });
 
   it("records the current ReAct context as generation input when available", async () => {
-    const langfuse = new FakeLangfuse();
-    const observer = createLangfuseAgentObserver({
-      langfuse,
+    const { observer, trace } = createObserver({
       sessionId: "session-react",
-      model: "gpt-test",
-      provider: "openai",
       systemPrompt: "runtime policy",
       inputMessages: [
         { role: "system", content: "runtime policy" },
@@ -278,12 +270,15 @@ describe("langfuse observability", () => {
         ]),
         toolResultMessage("call-1", "workspace_read"),
       ],
-      startedAt: 1000,
     });
 
     await observer.handleEvent({ type: "message_start", message: assistantMessage([]) });
 
-    const generationInput = langfuse.traces[0]?.generations[0]?.body.input;
+    const generation = required(trace.generations[0], "ReAct generation");
+    const inputMessages = z.array(z.record(z.string(), z.unknown())).parse(generation.body.input);
+    const generationInput = inputMessages.map((message) =>
+      message.role === "assistant" ? { ...message, content: parseToolCallOutput(message.content) } : message,
+    );
     expect(generationInput).toEqual([
       { role: "system", content: "runtime policy", contentLength: 14 },
       expect.objectContaining({
@@ -293,7 +288,7 @@ describe("langfuse observability", () => {
       expect.objectContaining({
         role: "assistant",
         content: {
-          toolCalls: [{ id: "call-1", name: "workspace_read", arguments: '{\n  "path": "a.txt"\n}' }],
+          toolCalls: [{ id: "call-1", name: "workspace_read", arguments: { path: "a.txt" } }],
         },
       }),
       expect.objectContaining({
@@ -303,30 +298,73 @@ describe("langfuse observability", () => {
         content: [{ type: "text", text: "result", contentLength: 6 }],
       }),
     ]);
-    expect(generationInput).not.toBe("initial task");
   });
 
   it("ends unfinished observations and the root exactly once", async () => {
-    const langfuse = new FakeLangfuse();
-    const observer = createLangfuseAgentObserver({
-      langfuse,
+    const { observer, trace } = createObserver({
       sessionId: "interrupted-run",
-      model: "gpt-test",
-      provider: "openai",
       inputMessages: [],
-      startedAt: 1000,
     });
     await observer.handleEvent({ type: "message_start", message: assistantMessage([]) });
     await observer.handleEvent(toolStart("call-1", "workspace_read", {}));
     await observer.handleEvent({ type: "agent_end", messages: [] });
     observer.finish("", []);
 
-    const trace = langfuse.traces[0];
-    expect(trace?.generations[0]?.ended?.metadata).toMatchObject({ incomplete: true });
-    expect(trace?.spans[0]?.ended?.metadata).toMatchObject({ incomplete: true });
-    expect(trace?.endCount).toBe(1);
+    const generation = required(trace.generations[0], "unfinished generation");
+    const span = required(trace.spans[0], "unfinished tool span");
+    expect(generation.ended?.metadata).toMatchObject({ incomplete: true });
+    expect(span.ended?.metadata).toMatchObject({ incomplete: true });
+    expect(generation.endCount).toBe(1);
+    expect(span.endCount).toBe(1);
+    expect(trace.endCount).toBe(1);
   });
 });
+
+function createObserver(options: Partial<Omit<LangfuseAgentObserverOptions, "langfuse">> = {}) {
+  const langfuse = new FakeLangfuse();
+  const observer = createLangfuseAgentObserver({
+    sessionId: "test-session",
+    model: "gpt-test",
+    provider: "openai",
+    inputMessages: [],
+    startedAt: 1000,
+    ...options,
+    langfuse,
+  });
+  return { langfuse, observer, trace: required(langfuse.traces[0], "agent trace") };
+}
+
+function required<T>(value: T | undefined, description: string): T {
+  if (value === undefined) throw new Error(`Expected ${description}`);
+  return value;
+}
+
+function observationOrder(observation: FakeSpan | FakeGeneration): number {
+  const order = observation.body.metadata?.eventOrder;
+  if (typeof order !== "number") throw new Error("Expected numeric observation event order");
+  return order;
+}
+
+const toolCallOutputSchema = z.object({
+  text: z.string().optional(),
+  toolCalls: z.array(z.object({ id: z.string(), name: z.string(), arguments: z.string() })),
+});
+
+function parseToolCallOutput(value: unknown) {
+  const output = toolCallOutputSchema.parse(value);
+  return {
+    ...output,
+    toolCalls: output.toolCalls.map((toolCall) => ({
+      ...toolCall,
+      arguments: parseJson(toolCall.arguments),
+    })),
+  };
+}
+
+function parseJson(value: unknown): unknown {
+  if (typeof value !== "string") throw new Error("Expected serialized JSON");
+  return JSON.parse(value);
+}
 
 function assistantMessage(content: AssistantContent): Extract<AgentMessage, { role: "assistant" }> {
   return {

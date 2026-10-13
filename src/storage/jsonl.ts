@@ -1,7 +1,8 @@
 import { createReadStream } from "node:fs";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline";
+import { isFileNotFoundError, readTextIfExists } from "./files.js";
 
 export async function appendJsonl(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
@@ -19,7 +20,7 @@ export async function readJsonl<T>(path: string, limit?: number): Promise<T[]> {
       if (limit !== undefined && values.length >= limit) break;
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (!isFileNotFoundError(error)) throw error;
   }
   return values;
 }
@@ -30,14 +31,9 @@ export async function readLastJsonl<T>(path: string, limit: number): Promise<T[]
 }
 
 export async function readCursor(path: string): Promise<number> {
-  try {
-    const raw = await readFile(path, "utf8");
-    const parsed = Number.parseInt(raw.trim(), 10);
-    return Number.isFinite(parsed) ? parsed : 0;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
-    throw error;
-  }
+  const raw = await readTextIfExists(path);
+  const parsed = Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export async function writeCursor(path: string, value: number): Promise<void> {

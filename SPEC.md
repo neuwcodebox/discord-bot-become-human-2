@@ -1668,6 +1668,8 @@ large file
 
 응답 agent는 대화 참여 상태 전이를 담당하지 않는다. 상태 전이는 orchestrator가 decision 결과와 실제 전송 결과를 보고 처리한다.
 
+응답 준비·생성·전송이 완료되거나 실패하면 입력 중 표시를 유지하는 타이머를 정리한다.
+
 Agent event 중 Discord에 표시하는 것은 visible assistant text와 runtime status뿐이다. tool call arguments, hidden reasoning, 내부 schema output은 Discord에 표시하지 않는다.
 
 새 human message가 agent 실행 중 들어오면 orchestrator는 상황에 따라 다음 중 하나를 선택한다.
@@ -1885,12 +1887,20 @@ JS/TS SDK v5와 OpenTelemetry를 초기화한다. 키가 없으면 관측성은 
 
 ## 22. 모듈 구조
 
-권장 모듈 구조:
+역할별 모듈 구조:
 
 ```txt
 src/
   index.ts
+  bootstrap-env.ts
+  env.ts
   config.ts
+  logger.ts
+  types.ts
+
+  context/
+    format.ts
+    limits.ts
 
   paths/
     runtime-paths.ts
@@ -1899,29 +1909,34 @@ src/
 
   discord/
     client.ts
+    admin-commands.ts
     normalizer.ts
     sender.ts
     streaming-writer.ts
     attachment-cache.ts
     action-tools.ts
+    chunker.ts
 
   conversation/
     orchestrator.ts
+    responder.ts
     state-store.ts
+    decision-schema.ts
     engagement-decision.ts
     stay-decision.ts
     transcript-builder.ts
     debounce.ts
+    follow-up-batch.ts
     reply-cadence.ts
 
   agent/
     runner.ts
     provider.ts
     context-builder.ts
+    dream-context-builder.ts
     skill-loader.ts
     user-profile-loader.ts
     memory-loader.ts
-    tool-registry.ts
 
   memory/
     event-log.ts
@@ -1931,9 +1946,13 @@ src/
     memory-inbox.ts
 
   tools/
+    types.ts
+    tool-registry.ts
+    tool-definition.ts
     workspace-files.ts
     memory.ts
     discord-actions.ts
+    discord-action-tools.ts
     sandbox-exec.ts
     bwrap.ts
     attachment.ts
@@ -1943,8 +1962,20 @@ src/
   storage/
     jsonl.ts
     atomic-write.ts
-    patch-log.ts
+    files.ts
+
+  observability/
+    langfuse.ts
+    langfuse-client.ts
+
+  scripts/
+    login-openai-codex.ts
 ```
+
+`orchestrator.ts`는 참여 상태와 후속 메시지 스케줄링을 관리하고, `responder.ts`는 응답 생성,
+전송, 빈 응답 재시도와 reaction 실행을 담당한다. 판단 JSON의 검증 schema와 파생 타입은
+`decision-schema.ts`에서 관리한다. 대화 context와 Dream context는 각 builder가 담당하며,
+공통 section 포맷과 파일 읽기는 `context/format.ts`, `storage/files.ts`를 사용한다.
 
 파일명에 `pi-agent.ts`처럼 라이브러리 이름을 직접 넣지 않는다. `runner.ts`, `provider.ts`처럼 프로젝트 역할 중심으로 이름을 붙인다.
 

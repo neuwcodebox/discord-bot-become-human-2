@@ -21,7 +21,7 @@ export async function handleAdminCommand(input: {
   message: Message<boolean>;
   config: AppConfig;
   paths: RuntimePaths;
-  orchestrator: ConversationOrchestrator;
+  orchestrator: Pick<ConversationOrchestrator, "adminForceCompact" | "adminForceDream">;
 }): Promise<boolean> {
   const { message, config, paths, orchestrator } = input;
   const content = message.content.trimStart();

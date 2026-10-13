@@ -1,10 +1,10 @@
-import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { DreamContextInput } from "../agent/context-builder.js";
-import { buildDreamPhase1Context, buildDreamPhase2Context } from "../agent/context-builder.js";
+import type { DreamContextInput } from "../agent/dream-context-builder.js";
+import { buildDreamPhase1Context, buildDreamPhase2Context } from "../agent/dream-context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
 import { childLogger } from "../logger.js";
 import { atomicWriteFile } from "../storage/atomic-write.js";
+import { readDirectoryIfExists, readTextIfExists } from "../storage/files.js";
 import { appendJsonl, readCursor, readJsonl, writeCursor } from "../storage/jsonl.js";
 import { createToolRegistry } from "../tools/tool-registry.js";
 import type { AgentRunResult, AppConfig, HistoryEntry, MemoryInboxEntry } from "../types.js";
@@ -62,14 +62,9 @@ export class DreamRunner {
       );
     }
 
-    const existingSkillNames = await readExistingSkillNames(this.workspaceRoot);
+    const existingSkillNames = await readDirectoryIfExists(join(this.workspaceRoot, "skills"));
 
-    const watchedFiles = await collectWatchedMemoryFiles(
-      this.workspaceRoot,
-      history,
-      unprocessedInbox,
-      dream,
-    );
+    const watchedFiles = collectWatchedMemoryFiles(history, unprocessedInbox, dream);
     const before = await snapshotFiles(this.workspaceRoot, watchedFiles);
 
     const contextInput: DreamContextInput = {
@@ -147,16 +142,6 @@ function assertDreamWriteAllowed(path: string, config: AppConfig): void {
   throw new Error(`Dream is not allowed to write ${path}`);
 }
 
-async function readExistingSkillNames(workspaceRoot: string): Promise<string[]> {
-  const skillsDir = join(workspaceRoot, "skills");
-  try {
-    return await readdir(skillsDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-}
-
 async function compactHistoryFile(historyPath: string, maxEntries: number): Promise<void> {
   if (maxEntries <= 0) return;
   const entries = await readJsonl<HistoryEntry>(historyPath);
@@ -165,12 +150,11 @@ async function compactHistoryFile(historyPath: string, maxEntries: number): Prom
   await atomicWriteFile(historyPath, `${kept.map((e) => JSON.stringify(e)).join("\n")}\n`);
 }
 
-async function collectWatchedMemoryFiles(
-  _workspaceRoot: string,
+function collectWatchedMemoryFiles(
   history: HistoryEntry[],
   inbox: MemoryInboxEntry[],
   dream: AppConfig["memory"]["dream"],
-): Promise<string[]> {
+): string[] {
   const targets = new Set<string>(["memory/MEMORY.md"]);
   if (dream.allowEditSoul) targets.add("SOUL.md");
   if (dream.allowEditGroup) targets.add("GROUP.md");
@@ -208,13 +192,4 @@ async function markInboxProcessed(
       : entry,
   );
   await atomicWriteFile(inboxPath, `${next.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
-}
-
-async function readTextIfExists(path: string): Promise<string> {
-  try {
-    return await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
 }

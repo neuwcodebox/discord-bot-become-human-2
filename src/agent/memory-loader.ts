@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { truncateText } from "../context/limits.js";
+import { readTextIfExists } from "../storage/files.js";
 import { readJsonl } from "../storage/jsonl.js";
 import type { AppConfig, HistoryEntry } from "../types.js";
 
@@ -43,13 +43,4 @@ export async function loadWorkspaceDocuments(workspaceRoot: string): Promise<{
     group: await readTextIfExists(join(workspaceRoot, "GROUP.md")),
     tools: await readTextIfExists(join(workspaceRoot, "TOOLS.md")),
   };
-}
-
-async function readTextIfExists(path: string): Promise<string> {
-  try {
-    return await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
 }

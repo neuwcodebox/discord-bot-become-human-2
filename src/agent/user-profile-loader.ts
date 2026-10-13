@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { readTextIfExists } from "../storage/files.js";
 import type { NormalizedDiscordMessage } from "../types.js";
 
 export async function loadRelevantUserProfiles(
@@ -26,13 +26,4 @@ export async function loadRelevantUserProfiles(
     if (profile) profiles.push({ userId, profile });
   }
   return profiles;
-}
-
-async function readTextIfExists(path: string): Promise<string> {
-  try {
-    return await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
 }

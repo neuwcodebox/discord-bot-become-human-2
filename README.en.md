@@ -10,7 +10,8 @@ Each server gets an isolated workspace that keeps the bot's identity, long-term 
 - Node.js 24.11+ (24.x) or 26+
 - A Discord bot account (create one at the Developer Portal)
 - OpenAI Codex account — or any OpenAI-compatible endpoint (OpenAI, OpenRouter, local models, etc.)
-- bubblewrap (`bwrap`) — required for sandboxed code execution, Linux only (only needed when `sandbox.enabled: true`)
+- Linux: bubblewrap (`bwrap`) for sandboxed execution
+- Windows: MXC — included with npm installation (x64/ARM64). Sandbox execution requires Node.js 24.21+ (24.x) or 26.8+
 
 ```bash
 # Debian/Ubuntu
@@ -23,8 +24,6 @@ sudo pacman -S bubblewrap
 sudo dnf install bubblewrap
 ```
 
-On Windows or environments where bwrap is unavailable, set `sandbox.enabled: false` in `config.json` to run without bwrap. Note that OS-level isolation is not provided in this mode — use it only in trusted environments.
-
 ---
 
 ## Installation
@@ -34,6 +33,19 @@ git clone <repo>
 cd discord-bot-become-human-2
 npm install
 ```
+
+On Windows, prepare and verify the sandbox after installation.
+
+```powershell
+# Administrator terminal
+npm run sandbox:prepare
+# Normal terminal
+npm run test:sandbox:windows
+```
+
+Re-run preparation after rebooting or reinstalling or changing tools. Run the bot as a normal user.
+Add tool installation folders through `sandbox.windows.readonlyPaths`.
+Preparation makes these folders readable by other Windows sandboxes too, so only select tool folders without personal files.
 
 ---
 
@@ -348,10 +360,11 @@ Toggles for each tool available to the bot. All default to `true`.
 
 | Key | Default | Description |
 |---|---|---|
-| `enabled` | `true` | `true`: OS-level isolation via bwrap. `false`: direct execution without bwrap (cwd fixed, env sanitized, shell interpreters blocked — no OS isolation, not recommended) |
-| `network` | `true` | Allow network access inside the sandbox (only effective when `enabled: true`) |
+| `enabled` | `true` | Enable sandboxed commands. `false` disables the execution tool |
+| `network` | `true` | Allow network access inside the sandbox. Windows excludes localhost connections |
 | `timeoutMs` | `30000` | Maximum sandbox execution time (ms) |
-| `outputLimitBytes` | `131072` | Maximum sandbox output size (bytes) |
+| `outputLimitBytes` | `131072` | Maximum stdout/stderr size per stream (bytes) |
+| `windows.readonlyPaths` | `[]` | Additional tool installation folders on Windows (Python, Git, etc.). Read-only |
 
 ### search (optional)
 
@@ -456,10 +469,12 @@ LOG_FORMAT=json
 ```bash
 npm run dev       # run the bot
 npm run build     # build
-npm test          # run tests
+npm test          # run unit tests
 npm run check     # type check
 npm run lint      # lint
 ```
+
+Run sandbox integration tests on the matching OS with `npm run test:sandbox:linux` or `npm run test:sandbox:windows`.
 
 Adjust log level:
 
@@ -503,7 +518,7 @@ All data is stored under `~/.discord-bot-become-human-2/`.
 - **Node.js / TypeScript**
 - **discord.js** — Discord event handling and message delivery
 - **pi agent harness** (`@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`) — ReAct-style agent execution
-- **bwrap** — sandbox isolation for code execution (Linux)
+- **bwrap / MXC** — sandbox isolation for code execution (Linux / Windows)
 
 ---
 

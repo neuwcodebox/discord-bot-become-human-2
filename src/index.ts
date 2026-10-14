@@ -11,6 +11,7 @@ import { childLogger } from "./logger.js";
 import { createLangfuseRuntime, type LangfuseRuntime } from "./observability/langfuse-client.js";
 import { createRuntimePaths, projectRootFromImportMeta } from "./paths/runtime-paths.js";
 import { ensureRuntimeRoot } from "./paths/workspace-init.js";
+import { shutdownSandboxExecutions } from "./tools/sandbox-exec.js";
 import type { BotIdentity } from "./types.js";
 
 const log = childLogger("main");
@@ -62,11 +63,20 @@ export async function main(): Promise<void> {
       ? new PiCodexAgentRunner({ ...config, llm }, langfuse)
       : new OpenAICompatibleAgentRunner({ ...config, llm }, langfuse);
   let orchestrator: ConversationOrchestrator | undefined;
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     orchestrator?.dispose();
+    try {
+      await shutdownSandboxExecutions();
+    } catch {
+      log.error("sandbox cleanup failed during shutdown");
+      process.exitCode = 1;
+    }
     await client.destroy();
     await langfuse?.shutdown();
-    process.exit(0);
+    process.exit(process.exitCode ?? 0);
   };
   process.once("SIGINT", () => void shutdown());
   process.once("SIGTERM", () => void shutdown());

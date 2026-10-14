@@ -163,6 +163,11 @@ const configSchema = z.object({
     network: z.boolean(),
     timeoutMs: z.number().int().positive(),
     outputLimitBytes: z.number().int().positive(),
+    windows: z
+      .object({
+        readonlyPaths: z.array(z.string().min(1)).default([]),
+      })
+      .default({ readonlyPaths: [] }),
   }),
 });
 
@@ -270,6 +275,7 @@ export const defaultConfig: AppConfig = {
     network: true,
     timeoutMs: 30000,
     outputLimitBytes: 131072,
+    windows: { readonlyPaths: [] },
   },
 };
 

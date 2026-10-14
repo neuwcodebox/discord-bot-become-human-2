@@ -12,7 +12,8 @@ Discord 그룹 채팅의 전체 맥락을 사람처럼 읽고 필요한 순간�
 - Node.js 24.11 이상(24 계열) 또는 26 이상
 - Discord 봇 계정 (Developer Portal에서 생성)
 - OpenAI Codex 계정 — 또는 OpenAI API 호환 엔드포인트 (OpenAI, OpenRouter, 로컬 모델 등)
-- bubblewrap (`bwrap`) — 코드 샌드박스 실행용, Linux 필요 (`sandbox.enabled: true`일 때만 요구됨)
+- Linux: bubblewrap (`bwrap`) — 샌드박스 실행용
+- Windows: MXC — npm 설치 시 포함 (x64/ARM64). 샌드박스 실행에는 Node.js 24.21 이상(24 계열) 또는 26.8 이상 필요
 
 ```bash
 # Debian/Ubuntu
@@ -25,8 +26,6 @@ sudo pacman -S bubblewrap
 sudo dnf install bubblewrap
 ```
 
-Windows나 bwrap를 설치할 수 없는 환경에서는 `config.json`에서 `sandbox.enabled`를 `false`로 설정하면 bwrap 없이 실행됩니다. 단, OS 수준 격리가 제공되지 않으므로 신뢰할 수 있는 환경에서만 사용하길 권장합니다.
-
 ---
 
 ## 설치
@@ -36,6 +35,19 @@ git clone <repo>
 cd discord-bot-become-human-2
 npm install
 ```
+
+Windows에서는 설치 후 샌드박스를 준비하고 검증합니다.
+
+```powershell
+# 관리자 터미널
+npm run sandbox:prepare
+# 일반 터미널
+npm run test:sandbox:windows
+```
+
+재부팅하거나 도구를 재설치·변경하면 준비 명령을 다시 실행하세요. 봇은 일반 사용자로 실행합니다.
+추가 도구는 `sandbox.windows.readonlyPaths`에 설치 폴더를 지정합니다.
+준비 명령은 이 폴더를 다른 Windows 샌드박스에서도 읽을 수 있게 하므로 개인 파일이 없는 도구 폴더만 지정하세요.
 
 ---
 
@@ -350,10 +362,11 @@ description: 언제 이 스킬을 써야 하는지 — 예: "Use this skill when
 
 | 항목 | 기본값 | 설명 |
 |---|---|---|
-| `enabled` | `true` | `true`: bwrap로 OS 수준 격리. `false`: bwrap 없이 직접 실행 (cwd 고정·env 정화·셸 차단 적용, OS 격리 없음 — 비권장) |
-| `network` | `true` | 샌드박스 내 네트워크 허용 (`enabled: true`일 때만 유효) |
+| `enabled` | `true` | 샌드박스 명령 실행 활성화. `false`이면 실행 도구 비활성화 |
+| `network` | `true` | 샌드박스 내 네트워크 허용. Windows는 localhost 연결 제외 |
 | `timeoutMs` | `30000` | 샌드박스 실행 최대 시간 (ms) |
-| `outputLimitBytes` | `131072` | 샌드박스 출력 최대 크기 (bytes) |
+| `outputLimitBytes` | `131072` | stdout/stderr 각각의 최대 크기 (bytes) |
+| `windows.readonlyPaths` | `[]` | Windows에서 추가로 사용할 도구 설치 폴더 (Python, Git 등). 읽기 전용 |
 
 ### search (선택)
 
@@ -460,10 +473,12 @@ LOG_FORMAT=json
 ```bash
 npm run dev       # 봇 실행
 npm run build     # 빌드
-npm test          # 테스트
+npm test          # 단위 테스트
 npm run check     # 타입 체크
 npm run lint      # 린트
 ```
+
+샌드박스 실기 검증은 해당 OS에서 `npm run test:sandbox:linux` 또는 `npm run test:sandbox:windows`로 실행합니다.
 
 로그 레벨 조절:
 
@@ -507,7 +522,7 @@ LOG_LEVEL=debug npm run dev
 - **Node.js / TypeScript**
 - **discord.js** — Discord 이벤트 수신 및 메시지 전송
 - **pi agent harness** (`@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`) — ReAct 스타일 에이전트 실행
-- **bwrap** — 샌드박스 실행 격리 (Linux)
+- **bwrap / MXC** — 샌드박스 실행 격리 (Linux / Windows)
 
 ---
 

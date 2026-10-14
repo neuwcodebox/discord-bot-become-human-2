@@ -20,7 +20,7 @@ discord.js
   -> agent runner
   -> OpenAI Codex provider
   -> guild workspace
-  -> skills / memory / tools / bwrap sandbox
+  -> skills / memory / tools / OS sandbox (Linux bwrap / Windows MXC LPAC)
 ```
 
 기본 LLM 설정은 다음과 같다.
@@ -163,7 +163,7 @@ model: gpt-5.5
             SKILL.md
 ```
 
-`config.json`과 `codex-auth.json`은 guild workspace 밖에 있다. Agent tool과 bwrap sandbox는 이 파일들에 접근할 수 없다.
+`config.json`과 `codex-auth.json`은 guild workspace 밖에 있다. Agent tool과 OS sandbox는 이 파일들에 접근할 수 없다.
 
 ### 3.2 프로젝트 저장소 구조
 
@@ -325,9 +325,10 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
   },
   "sandbox": {
     "enabled": true,
-    "network": false,
+    "network": true,
     "timeoutMs": 30000,
-    "outputLimitBytes": 131072
+    "outputLimitBytes": 131072,
+    "windows": { "readonlyPaths": [] }
   }
 }
 ```
@@ -376,7 +377,7 @@ not visible:
   host home directory
 ```
 
-Node 파일 도구는 bwrap와 별개로 항상 workspace guard를 통과해야 한다.
+Node 파일 도구는 OS sandbox와 별개로 항상 workspace guard를 통과해야 한다.
 
 ```ts
 assertInsideWorkspace(workspaceRoot, requestedPath)
@@ -411,7 +412,7 @@ project/resources/AGENTS.md
 - 프로젝트 소스의 일부
 - guild workspace template 아님
 - Agent tool 수정 대상 아님
-- bwrap 노출 대상 아님
+- OS sandbox 노출 대상 아님
 - ContextBuilder가 호출 시점에 주입
 ```
 
@@ -1075,62 +1076,105 @@ search_internet  (search 설정이 있을 때만 등록)
 type ToolContext = {
   guildId: string;
   workspaceRoot: string;
+  protectedPaths?: string[]; // 내부 sandbox deny 정책용 instruction 경로, agent 입력 아님
   channelId?: string;
   threadId?: string;
   actorUserId?: string;
 };
 ```
 
-파일 관련 도구는 workspace guard를 통과해야 한다. `fetch_url`은 별도 네트워크 도구이며 size limit, content-type limit, timeout을 가져야 한다. HTTP 실패 응답은 status code, status text, content-type, 최종 URL, 제한된 body preview를 에러 정보로 제공해야 한다. `sandbox_exec`의 network는 기본적으로 꺼져 있다.
+파일 관련 도구는 workspace guard를 통과해야 한다. `fetch_url`은 별도 네트워크 도구이며 size limit, content-type limit, timeout을 가져야 한다. HTTP 실패 응답은 status code, status text, content-type, 최종 URL, 제한된 body preview를 에러 정보로 제공해야 한다. `sandbox_exec`의 network는 기본적으로 허용되며 `sandbox.network: false`로 차단할 수 있다. 네트워크 정책은 파일 접근 허용 범위를 넓히지 않는다.
 
 ---
 
-## 13. bwrap sandbox
+## 13. OS sandbox
 
-`sandbox_exec`는 현재 guild workspace만 writable bind한다.
+`sandbox_exec`는 Linux에서 bwrap, Windows에서 MXC 1.0.0의 AppContainer + DACL 경로를 사용한다.
+Windows 10/11에서 같은 AppContainer 경로를 사용하며 WSL/Hyper-V에 의존하지 않는다. Windows native pipe 전달에는 Node.js
+24.21 이상(24 계열) 또는 26.8 이상이 필요하다. 실제 host의 정책 지원은 실행 요청별 native probe로
+검사하며, 필요한 격리를 제공하지 못하면 실행을 거부한다. macOS 등 다른 platform은 실행을 거부한다.
 
-개념적 설정:
+`tools.sandboxExec: false` 또는 `sandbox.enabled: false`이면 도구를 등록하지 않으며 직접 호출도
+거부한다. 비격리 실행 및 raw shell fallback은 제공하지 않는다. 기존 Windows config에서
+`sandbox.enabled: false`를 사용했다면 host 준비 후 `true`로 변경해야 한다.
 
-```txt
---unshare-all
---die-with-parent
---new-session
---bind <guild_workspace> <guild_workspace>
---chdir <guild_workspace>
-```
+실행 요청과 종료 상태는 `SandboxExecutor`가 관리하고 OS backend는 정책 준비와 native 실행을
+담당한다. Windows 일반 실행과 관리자 준비는 같은 read-only 경로 검증을 사용한다.
 
-필요한 runtime path만 read-only bind한다.
+공통 실행 계약:
 
-```txt
---ro-bind /usr /usr
---ro-bind /bin /bin
---ro-bind /lib /lib
---ro-bind /lib64 /lib64
-```
+- 현재 guild workspace만 host 데이터의 읽기/쓰기 경로로 허용한다.
+- 필요한 system/runtime 경로는 읽기/실행 전용이다.
+- stdin은 닫는다. host process의 token/API key/secret 환경변수를 상속하지 않는다.
+- argv를 shell로 자동 해석하지 않는다. 명시적으로 지정한 interpreter도 OS sandbox 안에서만 실행한다.
+- network 기본값은 true이고, false이면 외부 네트워크를 차단한다.
+- timeout 기본값은 30초이다. stdout/stderr는 각각 outputLimitBytes(기본 131072 bytes)로 제한하고,
+  UTF-8 문자 경계를 유지한다. 초과 출력은 계속 drain하되 저장하지 않는다.
+- 취소/timeout/봇 정상 종료 시 process tree를 정리하고, Windows ACL 복원이 끝난 뒤 호출을 종료한다.
+- 샌드박스 unavailable/정책 불일치/출력 오류를 에러로 보고하며 격리를 약화하지 않는다.
 
-기본 정책 (`sandbox.enabled: true` — bwrap 사용):
+### Linux bwrap
 
-```txt
-- network off
-- timeout 30s
-- stdout/stderr cap
-- workspace 밖 path reject
-- symlink traversal reject
-```
+현재 guild workspace를 유일한 writable host bind로 사용한다. user/PID/IPC 등 namespace를 분리하고
+`--die-with-parent`, `--new-session`을 적용한다. `--unshare-all` 뒤 network=true이면
+`--share-net`을 명시하여 네트워크를 허용한다. network=false이면 분리된 network namespace를 유지한다.
 
-`sandbox.enabled: false` — bwrap 미사용 시 소프트웨어 정책:
+`/usr`, `/bin`, `/lib`, 존재하는 `/lib64` 및 DNS/TLS runtime 파일을 read-only bind한다.
+`/proc`, 최소 `/dev`, ephemeral `/tmp`를 제공한다. `--clearenv`로 host 환경을 제거하고
+PATH/HOME/TMPDIR만 설정한다. system/임시 mount 뒤 workspace를 bind하여 `/tmp` 아래 workspace도
+유지한다. config/auth/instruction 파일은 모든 bind 뒤 canonical 경로에서 /dev/null로 mask하고,
+이 파일들이 workspace 안에 있으면 실행을 거부한다. bwrap가 없으면 실행을 거부한다.
 
-```txt
-- cwd를 guild workspace로 고정
-- shell: false (shell 해석 없음 — |, &&, $() 등 무력화)
-- stdin 차단
-- 환경변수 정화: 키 이름에 TOKEN/KEY/SECRET/PASSWORD/AUTH/CREDENTIAL이 포함된 변수 제거
-- 셸 인터프리터(sh, bash, zsh, fish, dash, ksh, tcsh, csh, cmd, powershell, pwsh) 실행 차단
-- timeout/stdout/stderr cap 동일 적용
-```
+### Windows MXC
 
-`sandbox.enabled: true`일 때 bwrap가 설치되지 않은 환경에서는 에러를 보고한다.
-`sandbox.enabled: false`이면 bwrap 없이 workspace 디렉터리에서 직접 실행한다. OS 수준 격리는 제공되지 않는다.
+`@microsoft/mxc-sdk` 1.0.0을 optional dependency로 고정하여 x64/ARM64 native DLL과 host-prep
+helper를 제공한다. Windows에서 이 패키지가 누락되면 실행을 거부한다. Windows backend는 해당 OS에서만
+로드하므로 Linux 런타임은 MXC/koffi를 로드하지 않는다. 공개 Node request API는 leastPrivilege를 노출하지 않으므로, koffi로 MXC의 JSON
+C ABI를 호출한다. 정책 JSON 및 native 응답은 Zod 경계에서 검증한다.
+
+정책은 published 1.0.0 contract의 `processContainer.leastPrivilege: true`(LPAC)를 필수로 한다.
+일반 AppContainer의 ALL APPLICATION PACKAGES 기본 파일 권한을 상속하지 않는다. 요청별 probe가
+`appcontainer-dacl`을 확인해야 하며 BaseContainer/BFS/VM/WSL 경로로 변경하지 않는다.
+OS의 기본 system 리소스와 AppContainer의 private storage는 LPAC 자체의 권한 모델을 따른다.
+이는 filesystem virtualization이 아니며, 운영 host가 ALL RESTRICTED APPLICATION PACKAGES 등으로
+별도 부여한 권한까지 제거하는 보장은 아니다. guild/인증 파일 접근 차단은 실제 Windows에서 검증한다.
+
+- readwritePaths는 canonical 현재 guild workspace 하나뿐이다.
+- readonlyPaths는 Node 설치 directory, Windows System32, 운영자가 지정한
+  `sandbox.windows.readonlyPaths`이다. 환경의 전체 PATH/사용자 profile/global temp를 자동 허용하지 않는다.
+- runtime root, Codex auth, 주입 instruction을 노출하는 read-only grant 및 drive root/workspace
+  ancestor grant는 거부한다. 설정 경로와 junction 대상은 canonical 경로로 확인한다.
+- config.json, codex-auth.json, 주입 instruction, 다른 guild root와 현재 guild의 workspace 밖 host 기록은
+  존재하는 canonical 경로를 deniedPaths로도 차단한다. context의 workspace는 설정상 해당 guild 경로와 일치해야 한다.
+- executable은 workspace 또는 승인된 runtime 경로에 있는 .exe만 허용한다. Windows argv는
+  CreateProcessW용 인용 규칙으로 직렬화하며 .bat/.cmd를 자동 shell fallback으로 실행하지 않는다.
+- command마다 UUID 기반 containerId를 사용하여 동시 실행 시 SID/ACL 수명주기를 분리한다.
+- host 환경을 상속하지 않고 SYSTEMROOT/WINDIR/LOCALAPPDATA와 workspace 내 HOME/APPDATA/TEMP/TMP,
+  승인 runtime PATH만 전달한다. LOCALAPPDATA는 native launch 필수 메타데이터이며 접근 권한 grant가 아니다.
+- network=true이면 Internet 및 private network capability를 허용한다. host loopback exemption은
+  요청하지 않는다. UI/clipboard/input injection과 Microsoft telemetry는 비활성화한다.
+- native sandbox handle 호출은 직렬화한다. native pipe는 Node stream으로 소유권을 이전하고,
+  spawn/pipe 전달 실패에서도 소유한 handle을 해제한다.
+- 취소가 native spawn 중 도착해도 생성 완료 즉시 정리한다. 정상 종료에서도 native free를 먼저 기다려
+  descendant가 output pipe를 붙잡지 못하게 하고 ACL 복원 완료 뒤 output EOF를 기다린다.
+
+운영자 host 준비는 관리자 terminal에서 `npm run sandbox:prepare`로 수행한다. 이 명령만
+MXC의 `wxc-host-prep.exe`를 호출하며 봇이 스스로 권한 상승하거나 전체 host 권한으로 workload를
+실행하지 않는다. drive root의 최소 metadata 권한은 최초 설정하고, NUL device 권한은 부팅마다 준비한다.
+LPAC가 일반 ALL APPLICATION PACKAGES grant에 의존하지 않도록 Node/추가 승인 도구 설치 directory에는
+ALL RESTRICTED APPLICATION PACKAGES의 읽기/실행 ACE를 설정한다. 이 도구 권한은 영구 설정이며
+해당 group에 속하는 다른 LPAC에도 읽기/실행을 허용하므로 private 데이터가 포함된 폴더를 지정하지 않는다.
+Windows system directory ACL은 OS 설정을 사용한다. 도구 경로를 변경하거나 재설치하면 준비 명령을 다시 실행한다.
+준비되지 않은 host는 실행을 거부하고 해당 명령을 안내한다. 봇 자체는 일반 사용자로 실행한다.
+
+Windows 검증은 `npm run test:sandbox:windows`로 수행한다. 실제 DLL/NTFS를 사용하여 다른 guild,
+인증/config/instruction, 일반 AppContainer read grant가 있는 개인 directory, junction, read-only 쓰기,
+argv, 취소/timeout/동시 실행/ACL 복원을 검사한다. Linux에서는 이 integration suite가 skip되며,
+`DBH2_REQUIRE_WINDOWS_SANDBOX=1`이면 비-Windows 실행을 실패로 처리한다.
+
+`npm test`는 단위 테스트만 실행한다. OS integration 검증은 별도 config와 명령으로 실행하며,
+Linux는 `npm run test:sandbox:linux`로 workspace/보호 파일 격리, argv/환경변수, network 정책,
+출력 제한과 timeout을 실제 bwrap에서 검사한다. Windows CI는 단위 테스트와 실기 검증을 모두 실행한다.
 
 ---
 
@@ -1867,7 +1911,7 @@ model: gpt-5.5
 authPath: ~/.discord-bot-become-human-2/codex-auth.json
 ```
 
-Codex auth는 `@earendil-works/pi-ai/providers/openai-codex`의 provider OAuth API를 사용한다. `codex-auth.json`은 agent context, file tool, bwrap sandbox에 노출하지 않는다.
+Codex auth는 `@earendil-works/pi-ai/providers/openai-codex`의 provider OAuth API를 사용한다. `codex-auth.json`은 agent context, file tool, OS sandbox에 노출하지 않는다.
 
 pi-ai와 pi-agent-core는 `^1.2.0`을 사용한다. 설치된 pi 모델 카탈로그에 등록된 `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`는 `llm.model`로 선택할 수 있다. 기존 config의 모델 값과 기본 모델 `gpt-5.5`는 자동 변경하지 않는다.
 
@@ -1980,6 +2024,7 @@ src/
 
   paths/
     runtime-paths.ts
+    canonical-path.ts
     workspace-init.ts
     workspace-guard.ts
 
@@ -2031,6 +2076,12 @@ src/
     discord-action-tools.ts
     sandbox-exec.ts
     bwrap.ts
+    windows-mxc.ts
+    windows-mxc-prepare.ts
+    windows-mxc-paths.ts
+    windows-mxc-policy.ts
+    mxc-native.ts
+    sandbox-output.ts
     attachment.ts
     fetch-url.ts
     search-internet.ts
@@ -2142,7 +2193,7 @@ src/
 - fetch_url
 - search_internet
 - discord actions
-- sandbox_exec with bwrap
+- sandbox_exec with Linux bwrap / Windows MXC LPAC
 ```
 
 ---
@@ -2164,8 +2215,8 @@ src/
 - response generation은 ReAct agent run으로 수행한다.
 - Dream memory 관리도 agent run으로 수행한다.
 - 응답 스트리밍은 Discord message edit과 multi-message continuation으로 처리한다.
-- bwrap sandbox는 현재 guild workspace만 writable로 bind한다 (sandbox.enabled: true).
-- sandbox.enabled: false이면 bwrap 없이 직접 실행하며 소프트웨어 보안 정책(cwd 고정, env 정화, 셸 차단)을 적용한다.
+- OS sandbox는 현재 guild workspace만 writable host 데이터 경로로 허용한다 (Linux bwrap / Windows MXC LPAC).
+- sandbox.enabled: false이면 실행 도구를 비활성화하며 비격리 직접 실행은 제공하지 않는다.
 - AGENTS.md는 프로젝트 소스의 공용 read-only instruction으로만 사용한다.
 ```
 

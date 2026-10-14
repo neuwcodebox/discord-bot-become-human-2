@@ -180,6 +180,8 @@ export type PendingFollowUpBatch = {
 export type ToolContext = {
   guildId: string;
   workspaceRoot: string;
+  /** Host instructions used only to build sandbox deny policy, never tool input. */
+  protectedPaths?: string[];
   channelId?: string;
   threadId?: string;
   actorUserId?: string;

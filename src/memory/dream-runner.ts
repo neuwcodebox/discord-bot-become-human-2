@@ -101,7 +101,7 @@ export class DreamRunner {
       const phase2Context = await buildDreamPhase2Context(contextInput, phase1Analysis);
       const tools = createToolRegistry(
         this.config,
-        { guildId: this.guildId, workspaceRoot: this.workspaceRoot },
+        { guildId: this.guildId, workspaceRoot: this.workspaceRoot, protectedPaths: [this.agentsPath] },
         { writePolicy: (path) => assertDreamWriteAllowed(path, this.config) },
       );
       phase2Result = await this.agentRunner.run({

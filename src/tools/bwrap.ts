@@ -1,74 +1,44 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { access } from "node:fs/promises";
-import path from "node:path";
-import { truncateUtf8 } from "../context/limits.js";
+import { access, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { existingCanonicalPath } from "../paths/canonical-path.js";
+import { expandHome } from "../paths/runtime-paths.js";
+import type { AppConfig, ToolContext } from "../types.js";
+import { SandboxOutput, type SandboxResult } from "./sandbox-output.js";
 
-export type SandboxResult = {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-  stdoutTruncated: boolean;
-  stderrTruncated: boolean;
-  outputLimitBytes: number;
-};
-
-const SHELL_DENYLIST = new Set([
-  "sh",
-  "bash",
-  "zsh",
-  "fish",
-  "dash",
-  "ksh",
-  "tcsh",
-  "csh",
-  "cmd",
-  "cmd.exe",
-  "powershell",
-  "powershell.exe",
-  "pwsh",
-  "pwsh.exe",
-]);
-
-// Strips env vars whose names contain sensitive keywords at underscore boundaries.
-function sanitizeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const result: NodeJS.ProcessEnv = {};
-  const SENSITIVE = /(^|_)(TOKEN|KEY|SECRET|PASSWORD|AUTH|CREDENTIAL)(_|$)/i;
-  for (const [k, v] of Object.entries(env)) {
-    if (!SENSITIVE.test(k)) result[k] = v;
-  }
-  return result;
-}
-
-export async function hasBwrap(): Promise<boolean> {
-  const bwrapPath = "/usr/bin/bwrap";
+async function hasBwrap(): Promise<boolean> {
   try {
-    await access(bwrapPath, constants.X_OK);
+    await access("/usr/bin/bwrap", constants.X_OK);
     return true;
   } catch {
     return false;
   }
 }
 
-export async function runBwrap(input: {
+function bwrapArguments(input: {
   workspaceRoot: string;
   argv: string[];
-  timeoutMs: number;
-  outputLimitBytes: number;
   network: boolean;
-  signal?: AbortSignal;
-}): Promise<SandboxResult> {
-  if (!(await hasBwrap())) throw new Error("sandbox_exec is unavailable because bwrap is not installed.");
-  if (input.argv.length === 0) throw new Error("argv must not be empty.");
-  const args = [
+  deniedPaths?: string[];
+}): string[] {
+  if (!input.argv[0]) throw new Error("argv must not be empty.");
+  if (input.argv.some((argument) => argument.includes("\0"))) throw new Error("argv cannot contain NUL.");
+  return [
     "--die-with-parent",
     "--new-session",
     "--unshare-all",
-    ...(input.network ? [] : ["--unshare-net"]),
-    "--bind",
+    ...(input.network ? ["--share-net"] : []),
+    "--clearenv",
+    "--setenv",
+    "PATH",
+    "/usr/local/bin:/usr/bin:/bin",
+    "--setenv",
+    "HOME",
     input.workspaceRoot,
-    input.workspaceRoot,
+    "--setenv",
+    "TMPDIR",
+    "/tmp",
     "--chdir",
     input.workspaceRoot,
     "--ro-bind",
@@ -80,91 +50,131 @@ export async function runBwrap(input: {
     "--ro-bind",
     "/lib",
     "/lib",
-    "--ro-bind",
+    "--ro-bind-try",
     "/lib64",
     "/lib64",
+    "--ro-bind-try",
+    "/etc/ssl/certs",
+    "/etc/ssl/certs",
+    "--ro-bind-try",
+    "/etc/resolv.conf",
+    "/etc/resolv.conf",
+    "--proc",
+    "/proc",
+    "--dev",
+    "/dev",
+    "--tmpfs",
+    "/tmp",
+    // Mount parents first so a workspace under /tmp or a runtime directory
+    // remains visible. Protected-file masks must then override every bind.
+    "--bind",
+    input.workspaceRoot,
+    input.workspaceRoot,
+    ...(input.deniedPaths ?? []).flatMap((target) => ["--ro-bind", "/dev/null", target]),
     "--",
     ...input.argv,
   ];
-  return runProcess("/usr/bin/bwrap", args, input.timeoutMs, input.outputLimitBytes, undefined, input.signal);
 }
 
-export async function runDirect(input: {
+async function runBwrap(input: {
   workspaceRoot: string;
   argv: string[];
   timeoutMs: number;
   outputLimitBytes: number;
+  network: boolean;
+  deniedPaths?: string[];
   signal?: AbortSignal;
 }): Promise<SandboxResult> {
-  const command = input.argv[0];
-  if (command === undefined) throw new Error("argv must not be empty.");
-  const args = input.argv.slice(1);
-  const cmdName = path.basename(command).toLowerCase();
-  if (SHELL_DENYLIST.has(cmdName)) {
-    throw new Error(`sandbox_exec: shell interpreters are not allowed (${cmdName}).`);
-  }
-  return runProcess(
-    command,
-    args,
-    input.timeoutMs,
-    input.outputLimitBytes,
-    {
-      cwd: input.workspaceRoot,
-      env: sanitizeEnv(process.env),
-    },
-    input.signal,
-  );
-}
-
-function runProcess(
-  command: string,
-  args: string[],
-  timeoutMs: number,
-  outputLimitBytes: number,
-  options?: { cwd?: string; env?: NodeJS.ProcessEnv },
-  signal?: AbortSignal,
-): Promise<SandboxResult> {
+  input.signal?.throwIfAborted();
+  if (!(await hasBwrap())) throw new Error("sandbox_exec is unavailable because bwrap is not installed.");
+  const args = bwrapArguments(input);
   return new Promise((resolve, reject) => {
-    signal?.throwIfAborted();
-    const child = spawn(command, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      ...options,
-      ...(signal ? { signal, killSignal: "SIGKILL" } : {}),
-    });
-    let stdout = "";
-    let stderr = "";
-    let stdoutTruncated = false;
-    let stderrTruncated = false;
+    input.signal?.throwIfAborted();
+    const child = spawn("/usr/bin/bwrap", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = new SandboxOutput(input.outputLimitBytes);
+    const stderr = new SandboxOutput(input.outputLimitBytes);
     let timedOut = false;
+    let failure: unknown;
+    const cancel = () => {
+      child.kill("SIGKILL");
+    };
+    input.signal?.addEventListener("abort", cancel, { once: true });
+    if (input.signal?.aborted) cancel();
     const timeout = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
-    }, timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => {
-      const capped = truncateUtf8(stdout + chunk.toString("utf8"), outputLimitBytes);
-      stdout = capped.text;
-      stdoutTruncated ||= capped.truncated;
+      cancel();
+    }, input.timeoutMs);
+    child.stdout.on("data", (chunk: unknown) => stdout.append(chunk));
+    child.stderr.on("data", (chunk: unknown) => stderr.append(chunk));
+    child.stdout.on("error", (error: Error) => {
+      failure = error;
+      cancel();
     });
-    child.stderr.on("data", (chunk: Buffer) => {
-      const capped = truncateUtf8(stderr + chunk.toString("utf8"), outputLimitBytes);
-      stderr = capped.text;
-      stderrTruncated ||= capped.truncated;
+    child.stderr.on("error", (error: Error) => {
+      failure = error;
+      cancel();
     });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
+    child.on("error", (error: Error) => {
+      failure = error;
     });
     child.on("close", (exitCode) => {
       clearTimeout(timeout);
+      input.signal?.removeEventListener("abort", cancel);
+      stdout.finish();
+      stderr.finish();
+      if (failure !== undefined) {
+        reject(failure);
+        return;
+      }
+      if (input.signal?.aborted) {
+        reject(input.signal.reason);
+        return;
+      }
       resolve({
         exitCode,
-        stdout,
-        stderr,
+        stdout: stdout.text,
+        stderr: stderr.text,
         timedOut,
-        stdoutTruncated,
-        stderrTruncated,
-        outputLimitBytes,
+        stdoutTruncated: stdout.truncated,
+        stderrTruncated: stderr.truncated,
+        outputLimitBytes: input.outputLimitBytes,
       });
     });
+  });
+}
+
+export async function runLinuxSandbox(
+  context: ToolContext,
+  config: AppConfig,
+  argv: string[],
+  signal: AbortSignal,
+): Promise<SandboxResult> {
+  const workspaceRoot = await realpath(context.workspaceRoot);
+  const protectedFiles = [
+    join(resolve(expandHome(config.runtime.rootDir)), "config.json"),
+    ...(config.llm.provider === "openai-codex" ? [resolve(expandHome(config.llm.codex.authPath))] : []),
+    ...(context.protectedPaths ?? []),
+  ];
+  const deniedPaths: string[] = [];
+  for (const candidate of protectedFiles) {
+    const canonical = await existingCanonicalPath(candidate);
+    if (!canonical) continue;
+    const fromWorkspace = relative(workspaceRoot, canonical);
+    if (
+      fromWorkspace === "" ||
+      (fromWorkspace !== ".." && !fromWorkspace.startsWith("../") && !isAbsolute(fromWorkspace))
+    ) {
+      throw new Error("Sandbox workspace contains protected runtime files.");
+    }
+    deniedPaths.push(canonical);
+  }
+  return runBwrap({
+    workspaceRoot,
+    argv,
+    timeoutMs: config.sandbox.timeoutMs,
+    outputLimitBytes: config.sandbox.outputLimitBytes,
+    network: config.sandbox.network,
+    deniedPaths,
+    signal,
   });
 }

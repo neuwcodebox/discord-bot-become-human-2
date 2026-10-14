@@ -1,0 +1,50 @@
+name: Windows filesystem sandbox
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-sandbox.yml
+      - package.json
+      - package-lock.json
+      - vitest*.config.ts
+      - src/**
+      - test/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/windows-sandbox.yml
+      - package.json
+      - package-lock.json
+      - vitest*.config.ts
+      - src/**
+      - test/**
+  workflow_dispatch:
+
+jobs:
+  native-filesystem-isolation:
+    # Server 2022 exercises the downlevel Windows API family; it is not a
+    # substitute for validating the actual deployment host's ACLs.
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - name: Install runtime and development dependencies
+        run: npm ci --include=optional
+      - name: Prepare AppContainer host
+        run: npm run sandbox:prepare
+      - name: Lint
+        run: npm run lint
+      - name: Type check
+        run: npm run check
+      - name: Sandbox unit tests
+        run: npm test -- test/windows-mxc-policy.test.ts test/windows-mxc-prepare.test.ts test/windows-sandbox-prepare.test.ts test/windows-mxc.test.ts test/mxc-native.test.ts test/sandbox-exec.test.ts test/sandbox-output.test.ts
+      - name: Real NTFS and native runtime integration
+        env:
+          DBH2_REQUIRE_WINDOWS_SANDBOX: '1'
+        run: npm run test:sandbox:windows
+      - name: Build
+        run: npm run build

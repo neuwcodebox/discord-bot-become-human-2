@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { defaultConfig, parseConfig } from "../src/config.js";
 
 describe("config parsing", () => {
+  it("fills Windows sandbox defaults for existing config files", () => {
+    const { windows: _windows, ...sandbox } = defaultConfig.sandbox;
+    expect(parseConfig({ ...defaultConfig, sandbox }).sandbox.windows).toEqual({ readonlyPaths: [] });
+  });
+
+  it("accepts operator-approved Windows readonly tool paths", () => {
+    const sandbox = { ...defaultConfig.sandbox, windows: { readonlyPaths: ["C:\\Tools\\Python"] } };
+    expect(parseConfig({ ...defaultConfig, sandbox }).sandbox.windows.readonlyPaths).toEqual([
+      "C:\\Tools\\Python",
+    ]);
+  });
   it("fills follow-up batch defaults for existing config files", () => {
     const { followUpBatch: _followUpBatch, ...engaged } = defaultConfig.conversation.engaged;
     const input = {

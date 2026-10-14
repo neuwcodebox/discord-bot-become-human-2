@@ -121,13 +121,14 @@ export function createToolRegistry(
       }),
     );
   }
-  if (config.tools.sandboxExec && config.sandbox.enabled) {
+  if (config.tools.sandboxExec) {
     tools.push(
       defineTool({
         name: "sandbox_exec",
         label: "Sandbox Exec",
-        description:
-          "Execute an argv command in an OS sandbox. Only the current guild workspace is writable; approved runtime paths are read-only.",
+        description: config.sandbox.enabled
+          ? "Execute an argv command in a bwrap sandbox bound to the current guild workspace."
+          : "Execute an argv command in the current guild workspace directory (no sandbox isolation).",
         parameters: Type.Object({ argv: Type.Array(Type.String()) }),
         execute: async (_toolCallId, params, signal) =>
           jsonResult(await sandboxExec(context, config, params, signal)),

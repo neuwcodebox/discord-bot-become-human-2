@@ -85,7 +85,7 @@ export class ConversationResponder {
             options.signal,
           )
         : undefined;
-      const toolContext = createToolContext(workspace, discordMessage, this.agentsPath);
+      const toolContext = createToolContext(workspace, discordMessage);
       const tools = createToolRegistry(this.config, toolContext, {
         attachmentCache: this.attachmentCache,
         discordActions: createDiscordActionRuntimeFromMessage(
@@ -191,7 +191,7 @@ export class ConversationResponder {
     const startedAt = Date.now();
     const targetMessageIds = task.targetMessageIds.length > 0 ? task.targetMessageIds : [currentMessage.id];
     const reactionTask: StayDecision = { ...task, stayEngaged: true, targetMessageIds };
-    const toolContext = createToolContext(workspace, discordMessage, this.agentsPath);
+    const toolContext = createToolContext(workspace, discordMessage);
     let reacted = false;
     const tools = reactionOnlyTools(
       createToolRegistry(this.config, toolContext, {
@@ -315,15 +315,10 @@ export class ConversationResponder {
   }
 }
 
-function createToolContext(
-  workspace: GuildWorkspace,
-  message: Message<boolean>,
-  agentsPath: string,
-): ToolContext {
+function createToolContext(workspace: GuildWorkspace, message: Message<boolean>): ToolContext {
   return {
     guildId: workspace.guildId,
     workspaceRoot: workspace.workspaceRoot,
-    protectedPaths: [agentsPath],
     channelId: message.channelId,
     ...(message.channel.isThread() ? { threadId: message.channel.id } : {}),
     actorUserId: message.author.id,

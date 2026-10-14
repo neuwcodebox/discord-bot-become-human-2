@@ -44,16 +44,6 @@ function discordActions(): DiscordActionRuntime {
 }
 
 describe("tool registry", () => {
-  it("omits sandbox_exec when OS isolation is disabled", () => {
-    const tools = createToolRegistry(
-      {
-        ...defaultConfig,
-        sandbox: { ...defaultConfig.sandbox, enabled: false },
-      },
-      testContext,
-    );
-    expect(tools.some((tool) => tool.name === "sandbox_exec")).toBe(false);
-  });
   it("registers enabled tools when all integrations are available", () => {
     const tools = createToolRegistry(
       { ...defaultConfig, search: { provider: "tavily", apiKey: "test-key" } },

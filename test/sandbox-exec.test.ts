@@ -1,156 +1,102 @@
-import { describe, expect, it, vi } from "vitest";
+import { tmpdir } from "node:os";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../src/config.js";
-import { SandboxExecutor } from "../src/tools/sandbox-exec.js";
-import type { SandboxResult } from "../src/tools/sandbox-output.js";
-import type { AppConfig, ToolContext } from "../src/types.js";
+import { runDirect } from "../src/tools/bwrap.js";
+import { sandboxExec } from "../src/tools/sandbox-exec.js";
 
-const context = { guildId: "guild-a", workspaceRoot: "/workspace" };
-const command = { argv: ["node", "script.js", "a b", "&|$()"] };
-const result: SandboxResult = {
-  exitCode: 0,
-  stdout: "ok",
-  stderr: "",
-  timedOut: false,
-  stdoutTruncated: false,
-  stderrTruncated: false,
-  outputLimitBytes: 131072,
+const processOptions = {
+  workspaceRoot: tmpdir(),
+  timeoutMs: 5000,
+  outputLimitBytes: 65536,
+};
+const context = { guildId: "test-guild", workspaceRoot: processOptions.workspaceRoot };
+const directConfig = {
+  ...defaultConfig,
+  sandbox: {
+    ...defaultConfig.sandbox,
+    enabled: false,
+    timeoutMs: processOptions.timeoutMs,
+    outputLimitBytes: processOptions.outputLimitBytes,
+  },
 };
 
-describe("sandbox command lifecycle", () => {
-  it("preserves command arguments, policy, and the backend result", async () => {
-    const backend = vi.fn(async () => result);
-    const executor = new SandboxExecutor(backend);
-    expect(await executor.run(context, defaultConfig, command)).toEqual(result);
-    expect(backend).toHaveBeenCalledWith(context, defaultConfig, command.argv, expect.any(AbortSignal));
+function runCommand(argv: string[], options: Partial<typeof processOptions> = {}) {
+  return runDirect({ ...processOptions, ...options, argv });
+}
+
+afterEach(() => vi.unstubAllEnvs());
+
+describe("direct process execution", () => {
+  it("rejects empty commands", async () => {
+    await expect(runCommand([])).rejects.toThrow(/argv must not be empty/);
   });
 
   it.each([
-    { ...defaultConfig, sandbox: { ...defaultConfig.sandbox, enabled: false } },
-    { ...defaultConfig, tools: { ...defaultConfig.tools, sandboxExec: false } },
-  ])("does not execute disabled commands", async (config) => {
-    const backend = vi.fn(async () => result);
-    await expect(new SandboxExecutor(backend).run(context, config, command)).rejects.toThrow("disabled");
-    expect(backend).not.toHaveBeenCalled();
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "cmd",
+    "cmd.exe",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "pwsh.exe",
+    "/bin/bash",
+  ])("blocks shell interpreter %s", async (shell) => {
+    await expect(runCommand([shell, "-c", "echo hi"])).rejects.toThrow(/shell interpreters are not allowed/);
   });
 
-  it.each([{ argv: [] }, { argv: [""] }, { argv: ["node", "a\0b"] }])(
-    "rejects invalid argv $argv without executing",
-    async ({ argv }) => {
-      const backend = vi.fn(async () => result);
-      await expect(new SandboxExecutor(backend).run(context, defaultConfig, { argv })).rejects.toThrow();
-      expect(backend).not.toHaveBeenCalled();
-    },
-  );
+  it("returns command output and a successful exit status", async () => {
+    const result = await runCommand(["echo", "hello"]);
 
-  it("rejects a pre-cancelled command without executing", async () => {
-    const backend = vi.fn(async () => result);
+    expect(result).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(result.stdout.trim()).toBe("hello");
+  });
+
+  it("returns a command's failed exit status", async () => {
+    const result = await runCommand(["false"]);
+
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  it("terminates a command that exceeds its timeout", async () => {
+    const result = await runCommand(["sleep", "10"], { timeoutMs: 200 });
+
+    expect(result.timedOut).toBe(true);
+  });
+
+  it("passes safe environment variables while excluding secrets", async () => {
+    vi.stubEnv("MY_TOKEN", "super-secret");
+    vi.stubEnv("SAFE_VAR", "safe-value");
+
+    const result = await runCommand(["env"]);
+
+    expect(result.stdout).not.toContain("MY_TOKEN");
+    expect(result.stdout).not.toContain("super-secret");
+    expect(result.stdout).toContain("SAFE_VAR=safe-value");
+  });
+});
+
+describe("sandbox disabled", () => {
+  it("terminates a running process when the response is cancelled", async () => {
     const controller = new AbortController();
+    const running = sandboxExec(context, directConfig, { argv: ["sleep", "10"] }, controller.signal);
+    const stopped = expect(running).rejects.toMatchObject({ name: "AbortError" });
     controller.abort();
-    await expect(
-      new SandboxExecutor(backend).run(context, defaultConfig, command, controller.signal),
-    ).rejects.toMatchObject({ name: "AbortError" });
-    expect(backend).not.toHaveBeenCalled();
+    await stopped;
   });
 
-  it("propagates backend failure without retrying outside isolation", async () => {
-    const error = new Error("isolation unavailable");
-    const backend = vi.fn(async () => {
-      throw error;
-    });
-    await expect(new SandboxExecutor(backend).run(context, defaultConfig, command)).rejects.toBe(error);
-    expect(backend).toHaveBeenCalledOnce();
+  it("executes a permitted command directly", async () => {
+    const result = await sandboxExec(context, directConfig, { argv: ["echo", "direct"] });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe("direct");
   });
 
-  it("refuses commands on unsupported operating systems", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    try {
-      await expect(new SandboxExecutor().run(context, defaultConfig, command)).rejects.toThrow(
-        "Linux and Windows only",
-      );
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
-  it("forwards cancellation and waits for backend cleanup before rejecting", async () => {
-    const cleanup = Promise.withResolvers<void>();
-    const cancelled = Promise.withResolvers<void>();
-    const executor = new SandboxExecutor(async (_context, _config, _argv, signal) => {
-      signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
-      await cleanup.promise;
-      signal.throwIfAborted();
-      return result;
-    });
-    const controller = new AbortController();
-    const running = executor.run(context, defaultConfig, command, controller.signal);
-    const rejected = expect(running).rejects.toMatchObject({ name: "AbortError" });
-    let settled = false;
-    void running.catch(() => {
-      settled = true;
-    });
-    controller.abort();
-    await cancelled.promise;
-    expect(settled).toBe(false);
-    cleanup.resolve();
-    await rejected;
-  });
-
-  it("shutdown cancels all pending commands, waits for cleanup, and rejects new work", async () => {
-    const firstCleanup = Promise.withResolvers<void>();
-    const secondCleanup = Promise.withResolvers<void>();
-    const cleanups = [firstCleanup, secondCleanup];
-    const cancelled: string[] = [];
-    let next = 0;
-    const backend = async (
-      _context: ToolContext,
-      _config: AppConfig,
-      argv: string[],
-      signal: AbortSignal,
-    ) => {
-      const cleanup = cleanups[next++];
-      if (!cleanup) throw new Error("Unexpected command.");
-      signal.addEventListener("abort", () => cancelled.push(argv.join(" ")), { once: true });
-      await cleanup.promise;
-      signal.throwIfAborted();
-      return result;
-    };
-    const executor = new SandboxExecutor(backend);
-    const running = [
-      executor.run(context, defaultConfig, { argv: ["first"] }),
-      executor.run(context, defaultConfig, { argv: ["second"] }),
-    ];
-    const rejected = running.map((command) => expect(command).rejects.toMatchObject({ name: "AbortError" }));
-    let finished = false;
-    const shutdown = executor.shutdown().then(() => {
-      finished = true;
-    });
-    expect(new Set(cancelled)).toEqual(new Set(["first", "second"]));
-    await expect(executor.run(context, defaultConfig, command)).rejects.toThrow("shutdown");
-    firstCleanup.resolve();
-    await rejected[0];
-    expect(finished).toBe(false);
-    secondCleanup.resolve();
-    await Promise.all(rejected);
-    await shutdown;
-    expect(finished).toBe(true);
-  });
-
-  it("shutdown reports cleanup failures", async () => {
-    const cleanup = Promise.withResolvers<SandboxResult>();
-    const executor = new SandboxExecutor(() => cleanup.promise);
-    const running = executor.run(context, defaultConfig, command);
-    const rejected = expect(running).rejects.toThrow("cleanup failed");
-    const shutdown = expect(executor.shutdown()).rejects.toThrow("shutdown cleanup");
-    cleanup.reject(new Error("cleanup failed"));
-    await Promise.all([rejected, shutdown]);
-  });
-
-  it("completed commands do not prevent later shutdown or affect another executor", async () => {
-    const executor = new SandboxExecutor(async () => result);
-    await executor.run(context, defaultConfig, command);
-    await executor.shutdown();
-    await expect(
-      new SandboxExecutor(async () => result).run(context, defaultConfig, command),
-    ).resolves.toEqual(result);
+  it("continues to block shell interpreters", async () => {
+    await expect(sandboxExec(context, directConfig, { argv: ["bash", "-c", "echo hi"] })).rejects.toThrow(
+      /shell interpreters are not allowed/,
+    );
   });
 });

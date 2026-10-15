@@ -12,7 +12,6 @@ export function createBotIdentity(user: {
     globalName: user.globalName,
     tag: user.tag,
     mention: `<@${user.id}>`,
-    // Generic role labels are not aliases: they would force replies to other bots.
     names: uniqueNames([user.username, user.globalName, user.tag]),
   };
 }

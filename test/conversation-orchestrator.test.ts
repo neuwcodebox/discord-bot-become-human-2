@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AgentRunner } from "../src/agent/runner.js";
 import { defaultConfig } from "../src/config.js";
 import { ConversationOrchestrator } from "../src/conversation/orchestrator.js";
+import { createBotIdentity } from "../src/discord/bot-identity.js";
 import { EventLog } from "../src/memory/event-log.js";
 import type {
   AgentRunRequest,
@@ -38,6 +39,64 @@ const declinedDecision = JSON.stringify({
 afterEach(() => vi.useRealTimers());
 
 describe("conversation orchestrator", () => {
+  it.each(["다른 bot 상태 확인해 줘", "BOT 도와줘", "robot 이야기"])(
+    "sends generic bot text through ambient judgment instead of a forced response: %s",
+    async (content) => {
+      const discord = await createDiscordFixture();
+      const identity = createBotIdentity({
+        id: discord.client.user.id,
+        username: "chatter",
+        globalName: "채터",
+        tag: "chatter#0001",
+      });
+      const run = vi.fn<AgentRunner["run"]>().mockResolvedValue({ text: declinedDecision });
+      const { orchestrator, workspace, log } = await createFixture({ run }, 0, identity);
+      const event = createMessageEvent(
+        createMessage(discord.message.id, {
+          channelId: discord.channel.id,
+          content,
+          cleanContent: content,
+        }),
+      );
+      await log.append(event);
+      await orchestrator.onMessage(event, workspace, discord.message);
+      await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+      expect(run.mock.calls[0]?.[0].traceLabel).toBe("engagement_decision");
+      expect(discord.sentMessages).toHaveLength(0);
+    },
+  );
+
+  it.each(["name", "mention", "reply"])(
+    "preserves direct %s triggers with the real identity",
+    async (kind) => {
+      const discord = await createDiscordFixture();
+      const identity = createBotIdentity({
+        id: discord.client.user.id,
+        username: "chatter",
+        globalName: "채터",
+        tag: "chatter#0001",
+      });
+      const run = vi.fn<AgentRunner["run"]>().mockResolvedValue({ text: "hello" });
+      const { orchestrator, workspace, log } = await createFixture({ run }, 0, identity);
+      const content = kind === "name" ? "Chatter 도와줘" : "도와줘";
+      const event = createMessageEvent(
+        createMessage(discord.message.id, {
+          channelId: discord.channel.id,
+          content,
+          cleanContent: content,
+          ...(kind === "mention" ? { mentions: [{ id: identity.userId, displayName: "chatter" }] } : {}),
+          ...(kind === "reply"
+            ? { replyTo: { messageId: "earlier-bot-message", authorId: identity.userId } }
+            : {}),
+        }),
+      );
+      await log.append(event);
+      await orchestrator.onMessage(event, workspace, discord.message);
+      await vi.waitFor(() => expect(discord.sentMessages).toHaveLength(1));
+      expect(run.mock.calls.map(([request]) => request.traceLabel)).toEqual(["response"]);
+    },
+  );
+
   it("rate limits ambient decisions even when engagement is declined", async () => {
     const run = vi.fn<AgentRunner["run"]>().mockResolvedValue({ text: declinedDecision });
     const { orchestrator, workspace, log } = await createFixture({ run });

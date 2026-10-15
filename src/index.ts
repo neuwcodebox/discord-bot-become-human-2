@@ -6,12 +6,12 @@ import { Events } from "discord.js";
 import { OpenAICompatibleAgentRunner, PiCodexAgentRunner } from "./agent/runner.js";
 import { loadOrCreateConfig } from "./config.js";
 import { ConversationOrchestrator } from "./conversation/orchestrator.js";
+import { createBotIdentity } from "./discord/bot-identity.js";
 import { createDiscordClient, loginDiscord, wireDiscordEvents } from "./discord/client.js";
 import { childLogger } from "./logger.js";
 import { createLangfuseRuntime, type LangfuseRuntime } from "./observability/langfuse-client.js";
 import { createRuntimePaths, projectRootFromImportMeta } from "./paths/runtime-paths.js";
 import { ensureRuntimeRoot } from "./paths/workspace-init.js";
-import type { BotIdentity } from "./types.js";
 
 const log = childLogger("main");
 
@@ -85,28 +85,6 @@ export async function main(): Promise<void> {
     );
   });
   await loginDiscord(client, config);
-}
-
-function createBotIdentity(user: {
-  id: string;
-  username: string;
-  globalName: string | null;
-  tag: string;
-}): BotIdentity {
-  return {
-    userId: user.id,
-    username: user.username,
-    globalName: user.globalName,
-    tag: user.tag,
-    mention: `<@${user.id}>`,
-    names: uniqueNames([user.username, user.globalName, user.tag, "bot"]),
-  };
-}
-
-function uniqueNames(values: Array<string | null>): string[] {
-  return [
-    ...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))),
-  ];
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {

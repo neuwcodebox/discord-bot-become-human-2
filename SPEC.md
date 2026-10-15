@@ -1211,6 +1211,11 @@ Hard gate에 의해 응답이 불가능한 경우에는 response generation agen
 - bot 이름/별칭 직접 호출
 ```
 
+이름/별칭은 현재 Discord bot 계정의 username, globalName, tag에서만 만든다. 실제 계정 이름이 아닌
+일반 역할명 `bot`을 공통 별칭으로 추가하지 않는다. 예를 들어 이름이 `chatter`인 봇은
+`다른 bot 상태 확인해 줘`만으로 강한 trigger가 되지 않는다. 실제 이름의 기존 대소문자 무시 부분 문자열
+매칭과 Discord mention/reply 판정은 유지한다.
+
 강한 trigger가 아니고 ambient engagement 조건을 만족하면 engagement decision call을 실행할 수 있다.
 Ambient engagement 조건에는 최소 침묵 시간과 decision call 쿨다운이 모두 포함된다. 쿨다운은
 engage 성공 여부와 무관하게 마지막 ambient decision call 시각을 기준으로 적용한다.

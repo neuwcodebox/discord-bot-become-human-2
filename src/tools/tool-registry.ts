@@ -3,6 +3,7 @@ import type { AppConfig, RuntimeAgentTool, ToolContext } from "../types.js";
 import { readAttachmentToolContent } from "./attachment.js";
 import { createDiscordActionTools } from "./discord-action-tools.js";
 import { fetchUrl } from "./fetch-url.js";
+import { createImageTools } from "./image-tools.js";
 import { memoryPropose } from "./memory.js";
 import { sandboxExec } from "./sandbox-exec.js";
 import { searchInternet } from "./search-internet.js";
@@ -16,6 +17,9 @@ export function createToolRegistry(
   integrations: ToolIntegrations = {},
 ): RuntimeAgentTool[] {
   const tools: RuntimeAgentTool[] = [];
+  if (config.tools.imageGeneration && config.llm.provider === "openai-codex" && !integrations.writePolicy) {
+    tools.push(...createImageTools(config.llm, config.images, context, integrations.attachmentCache));
+  }
   if (config.tools.workspaceFiles) {
     tools.push(
       defineTool({

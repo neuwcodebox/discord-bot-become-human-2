@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { defaultConfig, parseConfig } from "../src/config.js";
 
 describe("config parsing", () => {
+  it("fills image defaults for existing configs and allows disabling the tools", () => {
+    const { images: _images, ...oldConfig } = defaultConfig;
+    const { imageGeneration: _imageGeneration, ...tools } = oldConfig.tools;
+    const parsed = parseConfig({ ...oldConfig, tools });
+    expect(parsed.tools.imageGeneration).toBe(true);
+    expect(parsed.images).toEqual({
+      timeoutMs: 180_000,
+      maxInputBytes: 20 * 1024 * 1024,
+      maxOutputBytes: 20 * 1024 * 1024,
+    });
+    expect(
+      parseConfig({ ...defaultConfig, tools: { ...defaultConfig.tools, imageGeneration: false } }).tools
+        .imageGeneration,
+    ).toBe(false);
+  });
+
+  it.each([{ timeoutMs: 0 }, { maxInputBytes: -1 }, { maxOutputBytes: 33 * 1024 * 1024 }])(
+    "rejects invalid image limits",
+    (images) => {
+      expect(() => parseConfig({ ...defaultConfig, images })).toThrow();
+    },
+  );
+
   it("fills follow-up batch defaults for existing config files", () => {
     const { followUpBatch: _followUpBatch, ...engaged } = defaultConfig.conversation.engaged;
     const input = {

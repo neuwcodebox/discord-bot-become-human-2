@@ -142,7 +142,25 @@ const configSchema = z.object({
     readAttachment: z.boolean(),
     sandboxExec: z.boolean(),
     searchInternet: z.boolean(),
+    imageGeneration: z.boolean().default(true),
   }),
+  images: z
+    .object({
+      timeoutMs: z.number().int().positive().default(180_000),
+      maxInputBytes: z
+        .number()
+        .int()
+        .positive()
+        .max(32 * 1024 * 1024)
+        .default(20 * 1024 * 1024),
+      maxOutputBytes: z
+        .number()
+        .int()
+        .positive()
+        .max(32 * 1024 * 1024)
+        .default(20 * 1024 * 1024),
+    })
+    .default({ timeoutMs: 180_000, maxInputBytes: 20 * 1024 * 1024, maxOutputBytes: 20 * 1024 * 1024 }),
   search: z
     .object({
       provider: z.literal("tavily"),
@@ -264,6 +282,12 @@ export const defaultConfig: AppConfig = {
     readAttachment: true,
     sandboxExec: true,
     searchInternet: true,
+    imageGeneration: true,
+  },
+  images: {
+    timeoutMs: 180_000,
+    maxInputBytes: 20 * 1024 * 1024,
+    maxOutputBytes: 20 * 1024 * 1024,
   },
   sandbox: {
     enabled: true,

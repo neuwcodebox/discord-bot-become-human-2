@@ -54,6 +54,8 @@ describe("tool registry", () => {
     expect(new Set(tools.map((tool) => tool.name))).toEqual(
       new Set([
         "workspace_read",
+        "generate_image",
+        "edit_image",
         "workspace_write",
         "workspace_search",
         "memory_propose",
@@ -79,6 +81,8 @@ describe("tool registry", () => {
     expect(new Set(tools.map((tool) => tool.name))).toEqual(
       new Set([
         "workspace_read",
+        "generate_image",
+        "edit_image",
         "workspace_write",
         "workspace_search",
         "memory_propose",
@@ -86,6 +90,27 @@ describe("tool registry", () => {
         "sandbox_exec",
       ]),
     );
+  });
+
+  it("omits image tools for compatible providers and restricted write policies", () => {
+    const compatible = createToolRegistry(
+      {
+        ...defaultConfig,
+        llm: {
+          provider: "openai-compatible",
+          model: "local",
+          baseURL: "http://localhost:1234/v1",
+          apiKeyEnv: "LOCAL_API_KEY",
+          contextWindow: 4096,
+          reasoning: "medium",
+        },
+      },
+      testContext,
+    );
+    const restricted = createToolRegistry(defaultConfig, testContext, { writePolicy: () => {} });
+    for (const tools of [compatible, restricted]) {
+      expect(tools.some((tool) => ["generate_image", "edit_image"].includes(tool.name))).toBe(false);
+    }
   });
 
   it("respects disabled tools even when their integrations are available", () => {
@@ -101,6 +126,7 @@ describe("tool registry", () => {
           readAttachment: false,
           sandboxExec: false,
           searchInternet: false,
+          imageGeneration: false,
         },
       },
       testContext,

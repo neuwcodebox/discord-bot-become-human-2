@@ -321,7 +321,13 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
     "fetchUrl": true,
     "readAttachment": true,
     "sandboxExec": true,
-    "searchInternet": false
+    "searchInternet": false,
+    "imageGeneration": true
+  },
+  "images": {
+    "timeoutMs": 180000,
+    "maxInputBytes": 20971520,
+    "maxOutputBytes": 20971520
   },
   "sandbox": {
     "enabled": true,
@@ -1067,6 +1073,8 @@ sandbox_exec
 read_attachment
 fetch_url
 search_internet  (search 설정이 있을 때만 등록)
+generate_image   (Codex OAuth 이미지 생성)
+edit_image       (Codex OAuth 이미지 편집/합성)
 ```
 
 모든 도구는 현재 guild context를 받는다.
@@ -1082,6 +1090,61 @@ type ToolContext = {
 ```
 
 파일 관련 도구는 workspace guard를 통과해야 한다. `fetch_url`은 별도 네트워크 도구이며 size limit, content-type limit, timeout을 가져야 한다. HTTP 실패 응답은 status code, status text, content-type, 최종 URL, 제한된 body preview를 에러 정보로 제공해야 한다. `sandbox_exec`의 network는 기본적으로 꺼져 있다.
+
+### 12.1 이미지 생성과 편집
+
+`tools.imageGeneration`의 기본값은 `true`이며, 기존 config에서 생략해도 활성화된다.
+`llm.provider`가 `openai-codex`일 때만 `generate_image`와 `edit_image`를 등록한다.
+제한된 write policy를 사용하는 Dream에는 등록하지 않으며, reaction/decision run에도 제공하지 않는다.
+이미지 생성·편집은 응답 대화에서 요청한 이미지 작업에만 사용한다.
+
+인증은 대화와 같은 `llm.codex.authPath`를 읽고 만료 시 기존 OAuth 갱신 흐름을 사용한다.
+API 키 환경변수나 현재 디렉터리의 `auth.json`으로 fallback하지 않는다. OAuth access token의
+`https://api.openai.com/auth.chatgpt_account_id` claim을 검증해 account header를 구성한다.
+인증 파일 경로, token, 요청 body, base64 이미지와 provider 오류 body를 도구 결과나 동작 로그에 넣지 않는다.
+
+공식 Codex standalone Images client의 요청 형식을 따른다:
+
+```txt
+POST https://chatgpt.com/backend-api/codex/images/generations
+POST https://chatgpt.com/backend-api/codex/images/edits
+Authorization: Bearer <OAuth access token>
+ChatGPT-Account-ID: <account id>
+model: gpt-image-2
+n: 1
+```
+
+`generate_image` 입력은 `prompt`와 선택적인 `quality`, `size`, `background`다.
+`prompt`는 공백만으로 이루어질 수 없으며 최대 32,000자다.
+`quality`는 `auto|low|medium|high`, `size`는 `auto|1024x1024|1536x1024|1024x1536`,
+`background`는 `auto|opaque|transparent`이고 기본값은 모두 `auto`다.
+`edit_image`에는 같은 옵션과 1–5개 이미지 참조의 `images` 배열을 전달한다.
+모델에는 파일 경로·첨부 참조 schema를 노출하며, 입력 참조와 결과 전송 안내는 각 도구의
+schema와 description에서 제공한다. base64는 런타임이 HTTP payload를 구성할 때 생성한다.
+
+편집 입력은 현재 guild attachment cache의 `attachment://...` 참조 또는 현재 workspace 상대 파일
+경로만 허용한다. 원격 URL, data URL, 절대 경로와 workspace 밖으로 나가는 경로·symlink는 거절한다.
+Discord 첨부는 HTTPS `cdn.discordapp.com`/`media.discordapp.net`에서만 가져오며 redirect를 따르지 않는다.
+입력의 실제 바이트에서 PNG/JPEG/WebP 형식을 확인하고, 전체 입력 합계가 `images.maxInputBytes`
+(기본 20 MiB)를 넘으면 거절한다. 잘린 이미지는 API에 보내지 않는다.
+편집 API의 JSON `images`에는 검증된 이미지의 `{ image_url: "data:image/...;base64,..." }`만 전달한다.
+
+출력은 Zod로 JSON 구조와 base64 인코딩을 검증하고, PNG signature와 `images.maxOutputBytes`
+(기본 20 MiB)를 확인한다. 매 호출은 새 `generated/images/<UUID>.png`를 현재 guild workspace에 저장한다.
+원본이나 이전 결과를 덮어쓰지 않으며, 출력 경로는 API 호출 전과 저장 직전에 workspace guard로 검증한다.
+반환값은 `{ path, mimeType: "image/png", bytes }` 메타데이터뿐이다. 모델은 `discord_send_message`의
+`files: [path]`로 결과를 명시적으로 전송한다. 생성 도구 자체가 Discord에 전송하지 않는다.
+후속 편집에는 이전 결과의 상대 경로나 Discord 첨부 참조를 다시 사용할 수 있다.
+
+입력 로드부터 API 응답·저장까지 `images.timeoutMs`(기본 180,000 ms)와 run AbortSignal을 적용한다.
+HTTP 응답을 읽을 때도 크기를 제한하고, 초과한 stream은 취소한다. 취소·실패 시 부분 파일을 남기지 않으며
+이미 완료된 원격 생성은 되돌리지 않는다. 구독 한도를 중복 소비하지 않도록 자동 재시도하지 않는다.
+401은 OAuth 재로그인, 403은 계정/workspace 지원 여부, 429는 사용 한도·속도 제한으로 안내한다.
+`images.maxInputBytes`/`maxOutputBytes`의 설정 상한은 각각 32 MiB다. 이 도구의 네트워크 접근은
+`sandbox.network`와 별개이며, API 키로 우회하지 않는다.
+
+요청 형식 기준: [공식 Codex 이미지 클라이언트](https://github.com/openai/codex/blob/4eb4a65407d98cebc4c83bf13be440b9fbc78a7c/codex-rs/codex-api/src/endpoint/images.rs),
+[공식 Codex 이미지 도구](https://github.com/openai/codex/blob/4eb4a65407d98cebc4c83bf13be440b9fbc78a7c/codex-rs/ext/image-generation/src/tool.rs).
 
 ---
 
@@ -1872,6 +1935,10 @@ authPath: ~/.discord-bot-become-human-2/codex-auth.json
 
 Codex auth는 `@earendil-works/pi-ai/providers/openai-codex`의 provider OAuth API를 사용한다. `codex-auth.json`은 agent context, file tool, bwrap sandbox에 노출하지 않는다.
 
+같은 프로세스의 동시 credential load는 authPath별로 진행 중인 read/refresh를 공유하며, OAuth refresh의
+네트워크 timeout은 30초다. 이미지 도구의 인증 대기를 취소해도 다른 guild나 대화 요청이 공유하는 refresh는
+취소하지 않는다. 이미지 요청은 §12.1의 별도 Images client를 사용하며 대화 transport 설정을 변경하지 않는다.
+
 pi-ai와 pi-agent-core는 `^1.2.0`을 사용한다. 설치된 pi 모델 카탈로그에 등록된 `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`는 `llm.model`로 선택할 수 있다. 기존 config의 모델 값과 기본 모델 `gpt-5.5`는 자동 변경하지 않는다.
 
 모델 카탈로그는 설치된 pi 의존성에서 읽는다. 업데이트 배포 시 서버에서 `npm ci`, `npm run build`를 실행한 뒤 봇을 재시작한다. 카탈로그에 없는 모델을 지정하면 API 요청 전에 오류를 내며, 오류에는 설치된 카탈로그의 모델 ID 목록과 의존성 재설치·빌드·재시작 안내를 포함한다.
@@ -2011,6 +2078,7 @@ src/
   agent/
     runner.ts
     provider.ts
+    codex-images.ts
     context-builder.ts
     dream-context-builder.ts
     skill-loader.ts
@@ -2035,6 +2103,8 @@ src/
     sandbox-exec.ts
     bwrap.ts
     attachment.ts
+    image-tools.ts
+    image-input.ts
     fetch-url.ts
     search-internet.ts
 
@@ -2042,6 +2112,8 @@ src/
     jsonl.ts
     atomic-write.ts
     files.ts
+    bounded-response.ts
+    image-format.ts
 
   observability/
     langfuse.ts
@@ -2055,6 +2127,9 @@ src/
 전송, 빈 응답 재시도와 reaction 실행을 담당한다. 판단 JSON의 검증 schema와 파생 타입은
 `decision-schema.ts`에서 관리한다. 대화 context와 Dream context는 각 builder가 담당하며,
 공통 section 포맷과 파일 읽기는 `context/format.ts`, `storage/files.ts`를 사용한다.
+이미지 도구 등록·실행 흐름은 `tools/image-tools.ts`, guild 파일·첨부 입력 로드는
+`tools/image-input.ts`, 공통 이미지 형식 판별은 `storage/image-format.ts`가 담당한다.
+`agent/codex-images.ts`는 OAuth 이미지 API 요청과 응답 검증을 담당한다.
 
 파일명에 `pi-agent.ts`처럼 라이브러리 이름을 직접 넣지 않는다. `runner.ts`, `provider.ts`처럼 프로젝트 역할 중심으로 이름을 붙인다.
 

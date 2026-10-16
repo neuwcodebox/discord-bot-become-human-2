@@ -30,8 +30,65 @@ export type CodexCredentials = {
   apiKey?: string;
 };
 
+const pendingCredentials = new Map<string, Promise<CodexCredentials>>();
+
 export async function loadCodexCredentials(authPath: string): Promise<CodexCredentials> {
-  return loadConfiguredAuthPath(expandHome(authPath));
+  const resolvedPath = expandHome(authPath);
+  const pending = pendingCredentials.get(resolvedPath);
+  if (pending) return pending;
+  const loading = loadConfiguredAuthPath(resolvedPath);
+  pendingCredentials.set(resolvedPath, loading);
+  try {
+    return await loading;
+  } finally {
+    pendingCredentials.delete(resolvedPath);
+  }
+}
+
+const codexTokenClaimsSchema = z.object({
+  "https://api.openai.com/auth": z.object({ chatgpt_account_id: nonEmptyString }),
+});
+
+export async function loadCodexImageCredentials(
+  authPath: string,
+  signal?: AbortSignal,
+): Promise<{ accessToken: string; accountId: string }> {
+  signal?.throwIfAborted();
+  // Never propagate auth file contents, refresh responses, or token parse errors to tool logs/context.
+  try {
+    const { apiKey } = await waitForCredentials(authPath, signal);
+    signal?.throwIfAborted();
+    const payload = apiKey?.split(".")[1];
+    if (!apiKey || !payload) throw new Error("Missing OAuth access token");
+    const claims = codexTokenClaimsSchema.parse(
+      JSON.parse(Buffer.from(payload, "base64url").toString("utf8")),
+    );
+    return { accessToken: apiKey, accountId: claims["https://api.openai.com/auth"].chatgpt_account_id };
+  } catch {
+    signal?.throwIfAborted();
+    throw new Error("Codex image OAuth authentication is unavailable. Run: npm run login:codex");
+  }
+}
+
+function waitForCredentials(authPath: string, signal?: AbortSignal): Promise<CodexCredentials> {
+  const loading = loadCodexCredentials(authPath);
+  if (!signal) return loading;
+  // Cancelling one guild's image request must not abort a refresh shared with other guilds.
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    loading.then(
+      (credentials) => {
+        signal.removeEventListener("abort", abort);
+        resolve(credentials);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -66,7 +123,7 @@ async function loadPiAiOAuthAuth(parsed: CodexAuthFile, authPath: string): Promi
 
   let credential: OAuthCredential = codexAuth;
   if (credential.expires <= Date.now() + 5 * 60_000) {
-    credential = await oauth.refresh(credential, new AbortController().signal);
+    credential = await oauth.refresh(credential, AbortSignal.timeout(30_000));
     parsed["openai-codex"] = credential;
     await writeFile(authPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
   }

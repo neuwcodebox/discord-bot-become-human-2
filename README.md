@@ -345,6 +345,7 @@ description: 언제 이 스킬을 써야 하는지 — 예: "Use this skill when
 | `readAttachment` | 메시지 첨부 파일 읽기 |
 | `sandboxExec` | 샌드박스 코드 실행 |
 | `searchInternet` | 인터넷 검색 (`search` 설정도 필요) |
+| `imageGeneration` | Codex OAuth로 이미지 생성·편집 (`openai-codex`에서만 제공) |
 
 ### sandbox
 

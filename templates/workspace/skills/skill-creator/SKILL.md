@@ -27,4 +27,4 @@ Add `always: true` only for skills that should always be loaded (e.g. memory).
 
 ## Restrictions
 Only create or edit skills under `skills/` in the current guild workspace.
-Do not modify repo templates, `SOUL.md`, `GROUP.md`, `TOOLS.md`, or `resources/AGENTS.md`.
+Do not modify other workspace documents as part of skill creation.

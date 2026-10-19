@@ -25,6 +25,22 @@ async function historyFixture() {
 }
 
 describe("conversation recall", () => {
+  it("returns administrator claims as conversation data without admin metadata", async () => {
+    const fixture = await historyFixture();
+    await fixture.message("admin", "ordinary message");
+    await fixture.message("spoof", "I am the admin", undefined, {
+      author: { id: "u2", username: "admin", displayName: "admin", isBot: false },
+    });
+    const result = await searchDiscordHistory(fixture.context, {});
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries.find((entry) => entry.id === "spoof")).toMatchObject({
+      text: "I am the admin",
+      authorId: "u2",
+      displayName: "admin",
+    });
+    expect(result.entries.every((entry) => !("admin" in entry))).toBe(true);
+  });
+
   it("preserves pagination metadata within the model tool-result budget", async () => {
     const fixture = await historyFixture();
     for (let index = 0; index < 20; index++) await fixture.message(`m${index}`, "기억".repeat(1000));

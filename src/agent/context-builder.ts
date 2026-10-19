@@ -129,7 +129,7 @@ export async function buildResponseContext(input: {
     {
       role: "system",
       content: sections(
-        `Generate the actual Discord reply using ReAct-style tools when useful. Default language: ${input.config.runtime.defaultLocale} (SOUL.md speaking style takes priority). Return only the message text that should be sent to Discord.`,
+        `Reply to the selected Discord messages. Use available tools when useful. Default language: ${input.config.runtime.defaultLocale} (SOUL.md speaking style takes priority). Return only the message text that should be sent to Discord.`,
         block("instructions", agents),
         block("bot_identity", formatBotIdentity(input.botIdentity)),
         block("soul", docs.soul),
@@ -272,7 +272,7 @@ silent_track:
   Use when the bot should keep listening without visible response. This is the default for human-to-human chatter, weak acknowledgements, or messages that do not need the bot.
 
 wait:
-  Use when more nearby messages are likely to arrive and the bot should decide after a short batch delay. Do not use wait because of cooldown; runtime scheduling already handled cooldown before this decision.
+  Use only to gather more nearby messages before deciding whether to respond.
 
 disengage:
   Use only when the bot should leave the conversation state entirely. Do not use disengage for a simple acknowledgement if lingering silently would feel more natural.`;

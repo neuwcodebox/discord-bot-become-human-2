@@ -9,6 +9,9 @@
   workspace 구조를 바꾸면 같은 커밋에서 `SPEC.md`도 갱신한다.
 - `resources/AGENTS.md`는 봇 런타임이 에이전트에게 주입하는 read-only instruction이다. 이 최상위
   `AGENTS.md`와 목적이 다르므로 혼동하지 않는다.
+- 봇용 지침과 도구 설명에는 봇의 행동에 필요한 의미, 제약, 사용법을 적는다. 설정 키, 내부 저장 방식,
+  권한 판정 구현 같은 개발·운영 설명은 `SPEC.md`나 코드 주석에 둔다. 봇이 직접 사용하는 도구명,
+  파라미터, 출력 형식, workspace 경로는 유지한다.
 - `references/` 아래 checkout은 구현 참조용이다. 참조 코드를 그대로 복사하기보다 현재 TypeScript
   구조와 dependency 경계에 맞게 옮긴다.
 

@@ -6,8 +6,8 @@ description: Read, write, and search files inside the current guild workspace. U
 # Workspace Files
 
 ## Path Scoping
-All paths are resolved relative to the current guild workspace root. You cannot access files
-outside this workspace (other guilds, host home directories, runtime config, auth files).
+All paths are resolved relative to the current guild workspace root. Read, write, and search only
+files inside this workspace.
 
 ## Tools
 - `workspace_read` — read any text file by workspace-relative path (e.g. `skills/memory/SKILL.md`)

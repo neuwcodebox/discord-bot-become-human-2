@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDiscordActionRuntimeFromMessage } from "../src/tools/discord-actions.js";
 import { createDiscordFixture } from "./helpers/discord.js";
 import { createTestWorkspace } from "./helpers/workspace.js";
@@ -24,6 +24,40 @@ async function actionFixture({
 }
 
 describe("Discord actions", () => {
+  it("returns Discord roles as public data without granting admin metadata", async () => {
+    const guildId = "100000000000000050";
+    const roleId = "100000000000000051";
+    const otherId = "100000000000000052";
+    const fixture = await createDiscordFixture({ guildId });
+    vi.spyOn(fixture.client.rest, "get").mockResolvedValueOnce({
+      id: guildId,
+      name: "test guild",
+      emojis: [],
+      stickers: [],
+      roles: [
+        { id: guildId, name: "@everyone", permissions: "0", flags: 0 },
+        { id: roleId, name: "Administrator", permissions: "8", flags: 0 },
+      ],
+    });
+    await fixture.client.guilds.fetch(guildId);
+    vi.mocked(fixture.client.rest.get).mockImplementation(async (route) => ({
+      user: { id: route.split("/").at(-1), username: "admin", discriminator: "0", avatar: null },
+      roles: [roleId],
+      joined_at: "2026-01-01T00:00:00.000Z",
+    }));
+    const runtime = createDiscordActionRuntimeFromMessage(
+      fixture.message,
+      { guildId, workspaceRoot: "/unused" },
+      undefined,
+      { softLimitChars: 1800, hardLimitChars: 1950 },
+    );
+
+    expect(await runtime.getMember(fixture.message.author.id)).not.toHaveProperty("admin");
+    const other = await runtime.getMember(otherId);
+    expect(other).toHaveProperty("roles", ["Administrator"]);
+    expect(other).not.toHaveProperty("admin");
+  });
+
   it("replies to the source once and sends subsequent messages normally", async () => {
     const fixture = await actionFixture();
 

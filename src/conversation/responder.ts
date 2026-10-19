@@ -304,8 +304,7 @@ export class ConversationResponder {
         ...input.context,
         {
           role: "system",
-          content:
-            "The previous response generation returned empty text. Produce the Discord reply now as plain message text only. Do not call tools.",
+          content: "Produce the Discord reply now as plain message text only. Do not call tools.",
         },
       ],
       ...(input.onTextDelta ? { onTextDelta: input.onTextDelta } : {}),

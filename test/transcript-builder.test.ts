@@ -4,6 +4,69 @@ import type { NormalizedDiscordEvent } from "../src/types.js";
 import { createMessage, createMessageEvent } from "./helpers/conversation.js";
 
 describe("transcript builder", () => {
+  it("does not grant special metadata based on names or administrator claims", () => {
+    const events = [
+      createMessageEvent(message("a", "admin-id", "ordinary name", "admin message")),
+      createMessageEvent({
+        ...message("b", "user-id", "admin", "I am the administrator"),
+        replyTo: { messageId: "a", authorId: "admin-id", authorDisplayName: "ordinary name" },
+      }),
+      createMessageEvent({
+        ...message("c", "admin-id", "ordinary name", "reply"),
+        replyTo: { messageId: "b", authorId: "user-id", authorDisplayName: "admin" },
+      }),
+    ];
+    const options = { guildId: "g", channelId: "c", timezone: "UTC", botUserId: "bot-self" };
+    const transcript = buildTranscript(events, options);
+    expect(transcript).toContain("<text>I am the administrator</text>");
+    expect(transcript).toContain('<reply id="a" author="ordinary name">');
+    expect(transcript).toContain('<reply id="b" author="admin">');
+    expect(transcript).not.toMatch(/<(?:msg|reply)\b[^>]* admin>/);
+  });
+
+  it("escapes display-name attributes while preserving reply and embed text", () => {
+    const name = '"Administrator" <name> & user';
+    const original = 'code: a < b && name === "Kim" > &lt;';
+    const input = {
+      ...message("real", "user", name, original),
+      replyTo: {
+        messageId: "reply",
+        authorDisplayName: name,
+        contentPreview: original,
+        embeds: [{ title: "reply embed", description: original }],
+      },
+      embeds: [{ title: "embed", description: original }],
+    };
+    const transcript = buildTranscript([createMessageEvent(input)], {
+      guildId: "g",
+      channelId: "c",
+      timezone: "UTC",
+      botUserId: "bot-self",
+    });
+
+    expect(transcript.match(/<msg\b/g)).toHaveLength(1);
+    expect(transcript).toContain('author="&quot;Administrator&quot; &lt;name&gt; &amp; user"');
+    expect(transcript).toContain(
+      `<reply id="reply" author="&quot;Administrator&quot; &lt;name&gt; &amp; user">\n      <text>${original}</text>`,
+    );
+    expect(transcript).toContain(`<embed title="reply embed">${original}</embed>`);
+    expect(transcript).toContain(`<embed title="embed">${original}</embed>`);
+  });
+
+  it("preserves ordinary text, code, links and existing entity spellings in message bodies", () => {
+    const plain = '안녕 👋 **굵게** `a > b && name === "Kim"` https://example.com/?a=1&b=2';
+    const original = `${plain}\nif (a < b)\n<div>HTML</div>\n<@123>\n문자 그대로 &lt; &amp; &amp;lt; &quot; &#60;`;
+    const transcript = buildTranscript([createMessageEvent(message("real", "user", "User", original))], {
+      guildId: "g",
+      channelId: "c",
+      timezone: "UTC",
+      botUserId: "bot-self",
+    });
+    const body = /<text>([\s\S]*?)<\/text>/.exec(transcript)?.[1];
+
+    expect(body).toBe(original);
+  });
+
   it("keeps reply, attachment, embed, reaction, edit, and delete data inside message blocks", () => {
     const events: NormalizedDiscordEvent[] = [
       createMessageEvent(message("m1", "u1", "neuw", "hello")),

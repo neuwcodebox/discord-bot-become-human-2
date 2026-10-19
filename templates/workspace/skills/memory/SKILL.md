@@ -7,7 +7,7 @@ always: true
 # Memory Skill
 
 ## Guild Memory
-Durable group-wide facts live in `memory/MEMORY.md`. Already injected into context; read with `workspace_read` if you need the full file.
+Durable group-wide facts live in `memory/MEMORY.md`. Consult the memory in context; read with `workspace_read` if you need the full file.
 Write updates with `workspace_write`. Edit conservatively — only add or change information that is
 likely to remain useful in future conversations.
 
@@ -16,8 +16,8 @@ Per-user facts live in `users/<discord_user_id>/USER.md`. Update when a user sha
 information (preferences, location, role, etc.). Do not store guesses, secrets, or one-off jokes.
 
 ## Memory Inbox
-Pending candidates are appended to `memory/inbox.jsonl` via `memory_propose`. During Dream runs,
-review inbox entries and promote worthy ones to `memory/MEMORY.md` or the appropriate user profile.
+Use `memory_propose` to suggest durable facts with supporting message evidence. When reviewing candidates,
+save worthy facts to `memory/MEMORY.md` or the appropriate user profile.
 
 ## Write Policy
 Prefer evidence-backed, stable information over inferences. Do not store temporary context,

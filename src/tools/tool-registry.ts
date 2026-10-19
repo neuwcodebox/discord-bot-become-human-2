@@ -62,7 +62,8 @@ export function createToolRegistry(
       defineTool({
         name: "memory_propose",
         label: "Propose Memory",
-        description: "Append a memory candidate to memory/inbox.jsonl.",
+        description:
+          "Propose a durable fact or preference for later memory review, with its target file and message evidence.",
         parameters: Type.Object({
           target: Type.String(),
           confidence: Type.Number(),
@@ -131,7 +132,7 @@ export function createToolRegistry(
         name: "sandbox_exec",
         label: "Sandbox Exec",
         description: config.sandbox.enabled
-          ? "Execute an argv command in a bwrap sandbox bound to the current guild workspace."
+          ? "Execute a command in an isolated environment with the current guild workspace as its writable area."
           : "Execute an argv command in the current guild workspace directory (no sandbox isolation).",
         parameters: Type.Object({ argv: Type.Array(Type.String()) }),
         execute: async (_toolCallId, params, signal) =>

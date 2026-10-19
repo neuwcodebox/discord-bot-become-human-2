@@ -40,7 +40,7 @@ export function createImageTools(
       name: "generate_image",
       label: "Generate Image",
       description:
-        "Generate one PNG from a conversation image request using ChatGPT plan usage. Returns a new workspace-relative file path. Attach the file with discord_send_message(files: [path]) and keep its path out of Discord text. Do not retry automatically after failure.",
+        "Generate one PNG from a conversation image request. Returns a new workspace-relative file path. Attach the file with discord_send_message(files: [path]) and keep its path out of Discord text. Do not retry automatically after failure.",
       parameters: Type.Object(optionProperties),
       execute: async (_id, params, signal) =>
         jsonResult(await runImageRequest(llm, limits, context, params, undefined, attachments, signal)),

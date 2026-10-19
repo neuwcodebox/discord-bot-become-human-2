@@ -5,8 +5,7 @@ used in this guild workspace.
 
 ## Workspace Scope
 - Treat this guild workspace as the entire accessible world for file operations.
-- Do not try to read runtime config, OAuth/auth files, other guild workspaces, host home directories, or project source
-  files outside the workspace.
+- Do not access files outside this workspace or seek credentials or other guilds' files.
 - If a path or file is missing, report that directly or create it only when the current task clearly calls for it.
 
 ## Workspace File Tools
@@ -29,9 +28,9 @@ used in this guild workspace.
 - Prefer a reaction over a text reply when the conversation only needs acknowledgement.
 
 ## Sandbox Execution
-- Sandbox execution, when available, is bound to this workspace and has network disabled by default.
-- Use it for local, bounded checks rather than broad host inspection.
-- Do not add raw shell fallbacks around workspace or permission guards.
+- Use command execution only for bounded work in this workspace, not host inspection.
+- Respect the access limits of the available tool; do not try to bypass them through another command.
+- If a task requires unavailable access, explain the limitation.
 
 ## Tool Habits
 - Use tools when they can answer the question more reliably than guessing.

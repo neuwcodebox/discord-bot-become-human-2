@@ -8,6 +8,7 @@ import { readDirectoryIfExists, readTextIfExists } from "../storage/files.js";
 import { appendJsonl, readCursor, readJsonl, writeCursor } from "../storage/jsonl.js";
 import { createToolRegistry } from "../tools/tool-registry.js";
 import type { AgentRunResult, AppConfig, HistoryEntry, MemoryInboxEntry } from "../types.js";
+import { assertDreamWriteAllowed } from "./dream-write-policy.js";
 
 const log = childLogger("dream-runner");
 
@@ -76,7 +77,6 @@ export class DreamRunner {
       userFiles,
       existingSkillNames,
       config: this.config,
-      reason,
       ...(soul !== undefined ? { soul } : {}),
       ...(group !== undefined ? { group } : {}),
     };
@@ -102,7 +102,7 @@ export class DreamRunner {
       const tools = createToolRegistry(
         this.config,
         { guildId: this.guildId, workspaceRoot: this.workspaceRoot },
-        { writePolicy: (path) => assertDreamWriteAllowed(path, this.config) },
+        { writePolicy: (path) => assertDreamWriteAllowed(path, dream) },
       );
       phase2Result = await this.agentRunner.run({
         sessionId: `dream:${this.guildId}:phase2`,
@@ -130,16 +130,6 @@ export class DreamRunner {
     });
     return phase2Result;
   }
-}
-
-function assertDreamWriteAllowed(path: string, config: AppConfig): void {
-  const normalized = path.replaceAll("\\", "/").replace(/^\.?\//, "");
-  if (normalized === "memory/MEMORY.md") return;
-  if (config.memory.dream.allowEditUserProfiles && /^users\/[^/]+\/USER\.md$/.test(normalized)) return;
-  if (config.memory.dream.allowEditSoul && normalized === "SOUL.md") return;
-  if (config.memory.dream.allowEditGroup && normalized === "GROUP.md") return;
-  if (/^skills\/[^/]+\/SKILL\.md$/.test(normalized)) return;
-  throw new Error(`Dream is not allowed to write ${path}`);
 }
 
 async function compactHistoryFile(historyPath: string, maxEntries: number): Promise<void> {

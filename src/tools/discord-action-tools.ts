@@ -63,7 +63,7 @@ export function createDiscordActionTools(actions: DiscordActionRuntime): Runtime
       name: "discord_search_history",
       label: "Search Discord History",
       description:
-        "Recall recorded conversation in the current channel. Search message text or omit query to catch up on a time range. Results contain latest message versions, omit deleted messages, and can be paginated. Use the current model to interpret what matters; source links are for explicit requests only.",
+        "Recall recorded conversation in the current channel. Search message text or omit query to catch up on a time range. Results contain latest message versions, omit deleted messages, and can be paginated. Use results relevant to the conversation; provide source links only when explicitly asked.",
       parameters: Type.Object({
         query: Type.Optional(Type.String()),
         authorId: Type.Optional(Type.String()),

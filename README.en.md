@@ -108,6 +108,8 @@ Config file location:
 ~/.discord-bot-become-human-2/guilds/<server_id>/workspace/
 ```
 
+Template changes are not applied automatically to existing workspaces. To update them, stop the bot, overwrite each workspace's `SOUL.md`, `GROUP.md`, `TOOLS.md`, and built-in skills from the latest `templates/workspace/`, then restart. Keep `memory/`, `users/`, and custom skills.
+
 ### SOUL.md — Bot Identity
 
 Defines the bot's name, personality, speaking style, and boundaries.

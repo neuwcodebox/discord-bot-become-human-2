@@ -110,6 +110,8 @@ npm run dev
 ~/.discord-bot-become-human-2/guilds/<서버ID>/workspace/
 ```
 
+기존 workspace에는 템플릿 변경이 자동으로 반영되지 않습니다. 갱신하려면 봇을 중지하고 최신 `templates/workspace/`의 `SOUL.md`, `GROUP.md`, `TOOLS.md`와 기본 스킬을 각 workspace에 덮어쓴 뒤 재시작하세요. `memory/`, `users/`와 커스텀 스킬은 유지합니다.
+
 ### SOUL.md — 봇의 정체성
 
 봇의 이름, 성격, 말투, 해서는 안 되는 행동을 정의합니다.

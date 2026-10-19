@@ -86,7 +86,14 @@ export async function runBwrap(input: {
     "--",
     ...input.argv,
   ];
-  return runProcess("/usr/bin/bwrap", args, input.timeoutMs, input.outputLimitBytes, undefined, input.signal);
+  return runProcess(
+    "/usr/bin/bwrap",
+    args,
+    input.timeoutMs,
+    input.outputLimitBytes,
+    { env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" } },
+    input.signal,
+  );
 }
 
 export async function runDirect(input: {

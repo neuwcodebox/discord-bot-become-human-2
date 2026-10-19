@@ -21,7 +21,7 @@ export class DreamRunner {
   ) {}
 
   async run(reason: string): Promise<AgentRunResult | undefined> {
-    if (!this.config.memory.dream.enabled) return undefined;
+    if (!this.config.memory.dream.enabled || this.agentRunner.isAvailable?.() === false) return undefined;
     const dreamCursorPath = join(this.workspaceRoot, "memory", ".dream_cursor");
     const historyPath = join(this.workspaceRoot, "memory", "history.jsonl");
     const cursor = await readCursor(dreamCursorPath);

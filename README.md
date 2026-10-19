@@ -230,7 +230,12 @@ description: 언제 이 스킬을 써야 하는지 — 예: "Use this skill when
     "reasoning": "medium",
     "codex": {
       "authPath": "~/.discord-bot-become-human-2/codex-auth.json",
-      "transport": "auto"
+      "transport": "auto",
+      "usageLimit": {
+        "enabled": false,
+        "minRemainingPercent": 20,
+        "pollIntervalMs": 60000
+      }
     }
   }
 }
@@ -238,6 +243,9 @@ description: 언제 이 스킬을 써야 하는지 — 예: "Use this skill when
 
 - `reasoning`: `"low"` / `"medium"` / `"high"` / `"xhigh"`
 - `transport`: `"auto"` / `"responses"` / `"websocket"`
+- `usageLimit.enabled`: 구독 잔여량 제한 활성화 (기본 `false`). 중지 중에는 Discord에 자리 비움으로 표시
+- `usageLimit.minRemainingPercent`: 계정 전체 Codex의 최소 잔여율 (기본 `20`). 기간별 잔여량 중 하나라도 미만이면 중지하고, 회복되면 자동 재개
+- `usageLimit.pollIntervalMs`: 구독 잔여량 조회 간격 (ms, 기본 `60000`). 조회 실패 시 일시 중지
 - GPT-6 모델을 사용하려면 `model`을 `"gpt-6.1-sol"`, `"gpt-6-sol"` 또는 `"gpt-6-luna"`로 바꾼 뒤 봇을 재시작합니다. 기존 `config.json`의 모델 값은 자동으로 바뀌지 않습니다.
 - 업데이트를 배포할 때는 서버에서 `npm ci`와 `npm run build`를 실행한 뒤 봇을 재시작합니다. pi 모델 카탈로그는 설치된 의존성에서 읽으므로 소스나 `dist`만 교체하면 `Unknown openai-codex model` 오류가 계속 발생할 수 있습니다.
 

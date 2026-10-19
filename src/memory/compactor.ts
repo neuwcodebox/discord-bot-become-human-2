@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { AgentUnavailableError } from "../agent/availability.js";
 import { truncateText } from "../context/limits.js";
 import { buildTranscript } from "../conversation/transcript-builder.js";
 import { appendJsonl, readCursor, readJsonl, writeCursor } from "../storage/jsonl.js";
@@ -61,7 +62,8 @@ export class MemoryCompactor {
     try {
       const summary = await this.summarize(events);
       return summary.trim().length > 0 ? summary : fallbackSummary(events);
-    } catch {
+    } catch (error) {
+      if (error instanceof AgentUnavailableError) throw error;
       return fallbackSummary(events);
     }
   }

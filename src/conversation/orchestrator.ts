@@ -94,7 +94,7 @@ export class ConversationOrchestrator {
     discordMessage?: Message<boolean>,
   ): Promise<void> {
     this.attachmentCache.remember(event.payload);
-    if (this.closed || event.payload.author.isBot) return;
+    if (this.closed || event.payload.author.isBot || this.runner.isAvailable?.() === false) return;
     const id = conversationId(event.payload);
     let stream = this.streams.get(id);
     if (!stream) {
@@ -132,6 +132,19 @@ export class ConversationOrchestrator {
     this.dreamScheduler.stopAll();
     for (const stream of this.streams.values()) {
       this.clearTimer(stream.state);
+      stream.decisionController?.abort();
+      stream.active?.controller.abort();
+    }
+  }
+
+  pause(): void {
+    for (const stream of this.streams.values()) {
+      this.clearTimer(stream.state);
+      stream.pending = [];
+      stream.deferred = [];
+      stream.waitCount = 0;
+      delete stream.state.pendingFollowUp;
+      stream.state.engagement = "not_engaged";
       stream.decisionController?.abort();
       stream.active?.controller.abort();
     }
@@ -203,6 +216,10 @@ export class ConversationOrchestrator {
   }
 
   private async drain(stream: ConversationStream): Promise<void> {
+    if (this.runner.isAvailable?.() === false) {
+      this.pause();
+      return;
+    }
     if (this.closed || stream.deciding || stream.pending.length === 0) return;
     this.clearTimer(stream.state);
     let batch = stream.pending;
@@ -633,6 +650,7 @@ export class ConversationOrchestrator {
     workspace: GuildWorkspace,
     config: AppConfig = this.config,
   ): Promise<HistoryEntry | undefined> {
+    if (this.runner.isAvailable?.() === false) return undefined;
     return new MemoryCompactor(workspace.workspaceRoot, config, async (events) => {
       const result = await this.runner.run({
         sessionId: `compact:${workspace.guildId}`,

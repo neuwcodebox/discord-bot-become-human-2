@@ -49,7 +49,7 @@ const codexTokenClaimsSchema = z.object({
   "https://api.openai.com/auth": z.object({ chatgpt_account_id: nonEmptyString }),
 });
 
-export async function loadCodexImageCredentials(
+export async function loadCodexAccountCredentials(
   authPath: string,
   signal?: AbortSignal,
 ): Promise<{ accessToken: string; accountId: string }> {
@@ -66,14 +66,14 @@ export async function loadCodexImageCredentials(
     return { accessToken: apiKey, accountId: claims["https://api.openai.com/auth"].chatgpt_account_id };
   } catch {
     signal?.throwIfAborted();
-    throw new Error("Codex image OAuth authentication is unavailable. Run: npm run login:codex");
+    throw new Error("Codex OAuth authentication is unavailable. Run: npm run login:codex");
   }
 }
 
 function waitForCredentials(authPath: string, signal?: AbortSignal): Promise<CodexCredentials> {
   const loading = loadCodexCredentials(authPath);
   if (!signal) return loading;
-  // Cancelling one guild's image request must not abort a refresh shared with other guilds.
+  // Cancelling one request must not abort a refresh shared with other guilds or usage checks.
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason);
     signal.addEventListener("abort", abort, { once: true });

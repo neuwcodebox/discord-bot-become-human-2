@@ -1981,7 +1981,50 @@ contextWindow: <컨텍스트 토큰 한도>
 }
 ```
 
-### 21.2 agent runner
+### 21.2 Codex 구독 잔여량 제한
+
+`llm.codex.usageLimit`으로 계정 전체의 Codex 구독 잔여량에 따라 봇을 일시 중지한다.
+프로젝트별 구독 사용률은 산출하지 않는다. 다른 Codex 클라이언트 사용량도 같은 계정 한도에 반영된다.
+이 설정은 `openai-codex`에만 적용되며 기존 config에서 생략하면 비활성화한다.
+
+```json
+{
+  "usageLimit": {
+    "enabled": false,
+    "minRemainingPercent": 20,
+    "pollIntervalMs": 60000
+  }
+}
+```
+
+- `minRemainingPercent`: 0~100 사이의 최소 잔여율. 기본값은 20이다. 계정 기본 Codex bucket의
+  primary/secondary 기간 중 하나라도 이 값 미만이면 중지한다. 기준값과 같으면 허용하지만,
+  잔여량 0% 또는 서버가 명시한 사용 불가·한도 소진·지출 제한은 항상 중지한다.
+  별도의 모델용 `additional_rate_limits` bucket은 이 기본 계정 한도 판단에 사용하지 않는다.
+- `pollIntervalMs`: 10,000~3,600,000ms. 기본값은 60,000ms다. 시작 시와 주기적으로 조회하며,
+  메시지가 없어도 한도 회복을 감지해 자동 재개한다. 기간 종료를 추정해 재개하지 않고 다시 조회한다.
+- 조회는 공식 Codex 클라이언트와 같은 `GET https://chatgpt.com/backend-api/wham/usage`를 사용한다.
+  설정된 `authPath`에서 기존 OAuth refresh 경로로 인증을 얻고, Bearer와 `ChatGPT-Account-ID`를 사용한다.
+  별도 API 키나 Codex CLI 프로세스를 요구하지 않는다. 조회에는 10초 timeout, redirect 차단,
+  응답 크기 제한과 Zod 검증을 적용한다. 내부 endpoint 변경 시 조회 실패로 처리한다.
+- 진행 중 조회와 조회 결과는 같은 runner의 모든 guild 및 요청이 공유한다. 각 모델 호출과 도구 실행
+  직전에 유효한 캐시로 제한을 다시 확인한다. 설정을 끄면 조회·인증 접근·상태 표시를 추가하지 않는다.
+- 활성화된 상태에서 최초 조회 대기·조회 실패·해석 불가능한 한도는 모두 일시 중지다.
+  이전의 성공 결과로 계속 실행하지 않으며 다음 정상 조회에서 잔여량 조건을 만족하면 재개한다.
+- 일시 중지 중에도 Discord 연결, 이벤트 기록과 관리자 명령은 유지한다. 새 대화 입력은 응답 큐에
+  넣지 않고, 기존 pending/deferred 입력을 버리고 진행 중인 판단·응답·Dream·도구를 취소한다.
+  이미 완료한 전송과 파일 수정은 되돌리지 않는다. 답변 재시도나 fallback 메시지를 보내지 않는다.
+  회복 후에는 새 메시지부터 응답하며 중지 중의 메시지는 대화 기록으로 남는다.
+- 참여 판단, 응답, reaction, compaction, Dream을 모두 같은 제한으로 차단한다. 한도 중지로
+  compaction/Dream이 중단되면 처리 커서나 inbox를 완료 처리하지 않아 후속 실행에서 다시 처리한다.
+- 이 제한은 조회 시점의 잔여량을 기준으로 한다. 조회 간격, 동시 guild 요청, 진행 중 요청 및 서버의
+  사용량 반영 지연으로 기준값을 넘어 사용할 수 있으므로 정확한 프로젝트 사용 예산 보장은 아니다.
+- 활성화 시 Discord presence는 평소 online, 한도 중지·최초 확인 대기·조회 실패 중에는
+  자리 비움(idle)으로 표시하고 회복 시 online으로 돌아온다. 활동 문구는 비워 둔다.
+  로그에는 상태·잔여율·기간 개수만 기록하고 OAuth·응답 본문은 기록하지 않는다.
+- 종료 시 조회 타이머와 진행 중 조회, 상태 구독을 정리한다.
+
+### 21.3 agent runner
 
 `agent/runner.ts`는 선택된 provider에 따라 runner를 구분한다.
 
@@ -2013,7 +2056,7 @@ sessionId = dream:<guild_id>
 
 ---
 
-### 21.3 관측성
+### 21.4 관측성
 
 `observability.langfuse`가 설정되고 지정된 public/secret key 환경변수가 모두 있을 때만 Langfuse
 JS/TS SDK v5와 OpenTelemetry를 초기화한다. 키가 없으면 관측성은 비활성화한다.
@@ -2060,6 +2103,7 @@ src/
     sender.ts
     streaming-writer.ts
     attachment-cache.ts
+    usage-presence.ts
     action-tools.ts
     chunker.ts
 
@@ -2079,6 +2123,9 @@ src/
     runner.ts
     provider.ts
     codex-images.ts
+    codex-usage-client.ts
+    codex-usage.ts
+    availability.ts
     context-builder.ts
     dream-context-builder.ts
     skill-loader.ts
@@ -2130,6 +2177,9 @@ src/
 이미지 도구 등록·실행 흐름은 `tools/image-tools.ts`, guild 파일·첨부 입력 로드는
 `tools/image-input.ts`, 공통 이미지 형식 판별은 `storage/image-format.ts`가 담당한다.
 `agent/codex-images.ts`는 OAuth 이미지 API 요청과 응답 검증을 담당한다.
+`agent/codex-usage-client.ts`는 구독 한도 조회와 응답 검증을, `agent/codex-usage.ts`는
+잔여량 제한 정책·캐시·주기적 감시를 담당한다. `index.ts`가 감시기를 생성해 runner에 주입하고
+시작·종료를 관리한다.
 
 파일명에 `pi-agent.ts`처럼 라이브러리 이름을 직접 넣지 않는다. `runner.ts`, `provider.ts`처럼 프로젝트 역할 중심으로 이름을 붙인다.
 

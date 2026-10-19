@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { defaultConfig, parseConfig } from "../src/config.js";
 
 describe("config parsing", () => {
+  it("keeps usage limiting opt-in for existing Codex configs", () => {
+    if (defaultConfig.llm.provider !== "openai-codex") throw new Error("Expected Codex defaults");
+    const { usageLimit: _usageLimit, ...codex } = defaultConfig.llm.codex;
+    const parsed = parseConfig({ ...defaultConfig, llm: { ...defaultConfig.llm, codex } });
+    expect(parsed.llm).toMatchObject({
+      codex: { usageLimit: { enabled: false, minRemainingPercent: 20, pollIntervalMs: 60_000 } },
+    });
+  });
+
+  it.each([
+    { minRemainingPercent: -1 },
+    { minRemainingPercent: 101 },
+    { pollIntervalMs: 9999 },
+    { pollIntervalMs: 3_600_001 },
+  ])("rejects invalid usage limit settings: %s", (usageLimit) => {
+    if (defaultConfig.llm.provider !== "openai-codex") throw new Error("Expected Codex defaults");
+    const llm = defaultConfig.llm;
+    expect(() =>
+      parseConfig({ ...defaultConfig, llm: { ...llm, codex: { ...llm.codex, usageLimit } } }),
+    ).toThrow();
+  });
+
   it("fills image defaults for existing configs and allows disabling the tools", () => {
     const { images: _images, ...oldConfig } = defaultConfig;
     const { imageGeneration: _imageGeneration, ...tools } = oldConfig.tools;

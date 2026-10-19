@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadCodexCredentials, loadCodexImageCredentials } from "../src/agent/provider.js";
+import { loadCodexAccountCredentials, loadCodexCredentials } from "../src/agent/provider.js";
 import { createTestWorkspace } from "./helpers/workspace.js";
 
 const refresh = vi.hoisted(() =>
@@ -72,18 +72,18 @@ describe("codex auth loading", () => {
     expect(credentials.apiKey).toBeUndefined();
   });
 
-  it("shares one refresh across concurrent conversation and image credential loads", async () => {
+  it("shares one refresh across concurrent conversation and account credential loads", async () => {
     const authPath = join(root, "codex-auth.json");
     await writeExpiredCredentials(authPath);
     await Promise.all([
       loadCodexCredentials(authPath),
       loadCodexCredentials(authPath),
-      loadCodexImageCredentials(authPath).catch(() => undefined),
+      loadCodexAccountCredentials(authPath).catch(() => undefined),
     ]);
     expect(refresh).toHaveBeenCalledOnce();
   });
 
-  it("extracts the image account ID from the configured OAuth token", async () => {
+  it("extracts the account ID from the configured OAuth token", async () => {
     const authPath = join(root, "codex-auth.json");
     const claims = Buffer.from(
       JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "account" } }),
@@ -100,17 +100,20 @@ describe("codex auth loading", () => {
         },
       }),
     );
-    await expect(loadCodexImageCredentials(authPath)).resolves.toEqual({ accessToken, accountId: "account" });
+    await expect(loadCodexAccountCredentials(authPath)).resolves.toEqual({
+      accessToken,
+      accountId: "account",
+    });
   });
 
-  it("keeps token parse failures private and never falls back to cwd auth.json for images", async () => {
+  it("keeps token parse failures private and never falls back to cwd auth.json for account requests", async () => {
     await writeExpiredCredentials(join(root, "auth.json"));
     const authPath = join(root, "codex-auth.json");
-    await expect(loadCodexImageCredentials(authPath)).rejects.toThrow(/login:codex/);
+    await expect(loadCodexAccountCredentials(authPath)).rejects.toThrow(/login:codex/);
     await writeFile(authPath, JSON.stringify({ access_token: "private-token" }));
     let failure: unknown;
     try {
-      await loadCodexImageCredentials(authPath);
+      await loadCodexAccountCredentials(authPath);
     } catch (error) {
       failure = error;
     }
@@ -118,7 +121,7 @@ describe("codex auth loading", () => {
     expect(String(failure)).toContain("login:codex");
   });
 
-  it("cancels an image auth wait without cancelling the shared conversation refresh", async () => {
+  it("cancels an account auth wait without cancelling the shared conversation refresh", async () => {
     const authPath = join(root, "codex-auth.json");
     await writeExpiredCredentials(authPath);
     const pending = Promise.withResolvers<Awaited<ReturnType<typeof refresh>>>();
@@ -126,7 +129,7 @@ describe("codex auth loading", () => {
     const conversation = loadCodexCredentials(authPath);
     await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
     const controller = new AbortController();
-    const image = loadCodexImageCredentials(authPath, controller.signal);
+    const image = loadCodexAccountCredentials(authPath, controller.signal);
     controller.abort();
     await expect(image).rejects.toThrow(/abort/i);
     pending.resolve({

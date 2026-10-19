@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { AgentUnavailableError } from "../src/agent/availability.js";
 import { defaultConfig } from "../src/config.js";
 import { MemoryCompactor } from "../src/memory/compactor.js";
 import { EventLog } from "../src/memory/event-log.js";
@@ -9,6 +10,21 @@ import type { HistoryEntry, NormalizedDiscordEvent } from "../src/types.js";
 import { createTestWorkspace } from "./helpers/workspace.js";
 
 describe("memory lifecycle", () => {
+  it("preserves pending events and cursors when the subscription gate pauses compaction", async () => {
+    const { root, log, config } = await createMemoryFixture();
+    await appendConversation(log);
+    await expect(
+      new MemoryCompactor(root, config, async () => {
+        throw new AgentUnavailableError();
+      }).compactIfNeeded(),
+    ).rejects.toBeInstanceOf(AgentUnavailableError);
+    await expect(readFile(join(root, "memory", ".cursor"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readJsonl<HistoryEntry>(join(root, "memory", "history.jsonl"))).resolves.toEqual([]);
+    const recovered = await new MemoryCompactor(root, config, async () => "recovered").compactIfNeeded();
+    expect(recovered?.fromEventCursor).toBe(1);
+    expect(recovered?.summary).toBe("recovered");
+  });
+
   it("allocates distinct ordered cursors for concurrent appends from separate EventLog instances", async () => {
     const root = await createTestWorkspace("dbh2-stream-log-");
     const saved = await Promise.all(

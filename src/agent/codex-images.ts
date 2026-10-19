@@ -3,7 +3,7 @@ import { z } from "zod";
 import { childLogger } from "../logger.js";
 import { readBoundedResponse } from "../storage/bounded-response.js";
 import { imageMimeType } from "../storage/image-format.js";
-import { loadCodexImageCredentials } from "./provider.js";
+import { loadCodexAccountCredentials } from "./provider.js";
 
 const log = childLogger("codex-images");
 const imageOptionsSchema = z.object({
@@ -36,7 +36,7 @@ export async function requestCodexImage(
 ): Promise<Buffer> {
   signal.throwIfAborted();
   const request = codexImagePayloadSchema.parse(input);
-  const { accessToken, accountId } = await loadCodexImageCredentials(authPath, signal);
+  const { accessToken, accountId } = await loadCodexAccountCredentials(authPath, signal);
   signal.throwIfAborted();
   const operation = request.images ? "edits" : "generations";
   const startedAt = Date.now();

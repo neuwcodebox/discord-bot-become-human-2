@@ -3,11 +3,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Events } from "discord.js";
+import { CodexUsageMonitor } from "./agent/codex-usage.js";
 import { OpenAICompatibleAgentRunner, PiCodexAgentRunner } from "./agent/runner.js";
 import { loadOrCreateConfig } from "./config.js";
 import { ConversationOrchestrator } from "./conversation/orchestrator.js";
 import { createBotIdentity } from "./discord/bot-identity.js";
 import { createDiscordClient, loginDiscord, wireDiscordEvents } from "./discord/client.js";
+import { usagePresence } from "./discord/usage-presence.js";
 import { childLogger } from "./logger.js";
 import { createLangfuseRuntime, type LangfuseRuntime } from "./observability/langfuse-client.js";
 import { createRuntimePaths, projectRootFromImportMeta } from "./paths/runtime-paths.js";
@@ -57,12 +59,17 @@ export async function main(): Promise<void> {
 
   const client = createDiscordClient(config);
   const llm = config.llm;
+  const usageMonitor =
+    llm.provider === "openai-codex" && llm.codex.usageLimit.enabled
+      ? new CodexUsageMonitor(llm.codex)
+      : undefined;
   const runner =
     llm.provider === "openai-codex"
-      ? new PiCodexAgentRunner({ ...config, llm }, langfuse)
+      ? new PiCodexAgentRunner({ ...config, llm }, langfuse, usageMonitor)
       : new OpenAICompatibleAgentRunner({ ...config, llm }, langfuse);
   let orchestrator: ConversationOrchestrator | undefined;
   const shutdown = async () => {
+    usageMonitor?.dispose();
     orchestrator?.dispose();
     await client.destroy();
     await langfuse?.shutdown();
@@ -74,6 +81,13 @@ export async function main(): Promise<void> {
   client.once(Events.ClientReady, (readyClient) => {
     const botIdentity = createBotIdentity(readyClient.user);
     orchestrator = new ConversationOrchestrator(config, paths.resourcesAgentsPath, runner, botIdentity);
+    if (usageMonitor) {
+      usageMonitor.subscribe((state) => {
+        if (!state.allowed) orchestrator?.pause();
+        readyClient.user.setPresence(usagePresence(state.allowed));
+      });
+      usageMonitor.start();
+    }
     wireDiscordEvents({ client: readyClient, config, paths, orchestrator });
     log.info(
       {

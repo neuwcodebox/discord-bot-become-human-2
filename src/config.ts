@@ -25,6 +25,13 @@ const codexLlmSchema = z.object({
   codex: z.object({
     authPath: z.string().min(1),
     transport: z.enum(["auto", "responses", "websocket"]),
+    usageLimit: z
+      .object({
+        enabled: z.boolean().default(false),
+        minRemainingPercent: z.number().min(0).max(100).default(20),
+        pollIntervalMs: z.number().int().min(10_000).max(3_600_000).default(60_000),
+      })
+      .default({ enabled: false, minRemainingPercent: 20, pollIntervalMs: 60_000 }),
   }),
 });
 
@@ -204,6 +211,7 @@ export const defaultConfig: AppConfig = {
     codex: {
       authPath: "~/.discord-bot-become-human-2/codex-auth.json",
       transport: "auto",
+      usageLimit: { enabled: false, minRemainingPercent: 20, pollIntervalMs: 60_000 },
     },
   },
   runtime: {

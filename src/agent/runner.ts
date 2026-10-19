@@ -18,6 +18,8 @@ import {
   summarizeAgentToolActivity,
 } from "../observability/langfuse.js";
 import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
+import { AgentUnavailableError } from "./availability.js";
+import { CodexUsageMonitor } from "./codex-usage.js";
 import { loadCodexCredentials } from "./provider.js";
 import { bindAgentRunControl } from "./run-control.js";
 
@@ -38,18 +40,25 @@ type OpenAICompatAppConfig = Omit<AppConfig, "llm"> & { llm: OpenAICompatLlmConf
 
 export interface AgentRunner {
   run(request: AgentRunRequest): Promise<AgentRunResult>;
+  isAvailable?(): boolean;
 }
 
 export class PiCodexAgentRunner implements AgentRunner {
   constructor(
     private readonly config: CodexAppConfig,
     private readonly langfuse?: LangfuseAgentClient | null,
+    private readonly usageMonitor = new CodexUsageMonitor(config.llm.codex),
   ) {}
+
+  isAvailable(): boolean {
+    return !this.usageMonitor.signal.aborted && this.usageMonitor.current.allowed;
+  }
 
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     request.signal?.throwIfAborted();
     const startedAt = Date.now();
     const model = resolveCodexModel(this.config);
+    await this.usageMonitor.assertAvailable(request.signal);
     const messages = normalizeContextMessages(request.messages, this.config, model.contextWindow);
     const credentials = await loadCodexCredentials(this.config.llm.codex.authPath);
     if (!credentials.apiKey) {
@@ -58,15 +67,33 @@ export class PiCodexAgentRunner implements AgentRunner {
       );
     }
 
-    return runAgent(request, this.config, model, {
-      getApiKey: async () => credentials.apiKey,
-      transport: this.config.llm.codex.transport === "websocket" ? "websocket" : "auto",
-      thinkingLevel: this.config.llm.reasoning,
-      streamFn: codexStream,
-      messages,
-      startedAt,
-      langfuse: this.langfuse ?? null,
+    const controller = new AbortController();
+    const signal = AbortSignal.any([
+      controller.signal,
+      this.usageMonitor.signal,
+      ...(request.signal ? [request.signal] : []),
+    ]);
+    const unsubscribe = this.usageMonitor.subscribe((state) => {
+      if (!state.allowed) controller.abort(new AgentUnavailableError());
     });
+    const assertAvailable = () => this.usageMonitor.assertAvailable(signal);
+    try {
+      return await runAgent({ ...request, signal }, this.config, model, {
+        getApiKey: async () => {
+          await assertAvailable();
+          return credentials.apiKey;
+        },
+        beforeToolCall: assertAvailable,
+        transport: this.config.llm.codex.transport === "websocket" ? "websocket" : "auto",
+        thinkingLevel: this.config.llm.reasoning,
+        streamFn: codexStream,
+        messages,
+        startedAt,
+        langfuse: this.langfuse ?? null,
+      });
+    } finally {
+      unsubscribe();
+    }
   }
 }
 
@@ -110,6 +137,7 @@ export class OpenAICompatibleAgentRunner implements AgentRunner {
 
 type RunAgentOptions = {
   getApiKey: () => Promise<string | undefined>;
+  beforeToolCall?: () => Promise<void>;
   transport?: "auto" | "websocket";
   thinkingLevel: "low" | "medium" | "high" | "xhigh";
   streamFn: StreamFn;
@@ -162,6 +190,10 @@ async function runAgent(
       tools: request.tools ?? [],
     },
     getApiKey: opts.getApiKey,
+    beforeToolCall: async () => {
+      await opts.beforeToolCall?.();
+      return undefined;
+    },
     streamFn: opts.streamFn,
     ...(opts.transport !== undefined ? { transport: opts.transport } : {}),
     transformContext: async (contextMessages) => {

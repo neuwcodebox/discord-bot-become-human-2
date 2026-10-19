@@ -39,6 +39,45 @@ const declinedDecision = JSON.stringify({
 afterEach(() => vi.useRealTimers());
 
 describe("conversation orchestrator", () => {
+  it("drops input while paused and responds only to new input after quota recovers", async () => {
+    const discord = await createDiscordFixture();
+    const identity = createBotIdentity(discord.client.user);
+    const run = vi.fn<AgentRunner["run"]>().mockResolvedValue({ text: "resumed reply" });
+    let available = false;
+    const fixture = await createFixture({ run, isAvailable: () => available }, 0, identity);
+    for (const id of ["paused", "resumed"]) {
+      const event = createMessageEvent(
+        createMessage(id, {
+          channelId: discord.channel.id,
+          mentions: [{ id: identity.userId, displayName: "bot" }],
+        }),
+      );
+      await fixture.log.append(event);
+      await fixture.orchestrator.onMessage(event, fixture.workspace, discord.message);
+      if (id === "paused") {
+        expect(run).not.toHaveBeenCalled();
+        available = true;
+      }
+    }
+    await vi.waitFor(() => expect(discord.sentMessages).toHaveLength(1));
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("cancels active work and clears queued follow-ups when paused", async () => {
+    const pending = Promise.withResolvers<AgentRunResult>();
+    const run = vi.fn<AgentRunner["run"]>((request) => waitForResult(request, pending.promise));
+    const fixture = await streamFixture(run, { debounceMs: 10_000, maxMessages: 1000 });
+    await fixture.publish("질문", { mention: true });
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    await fixture.publish("추가 질문", { mention: true });
+    fixture.orchestrator.pause();
+    expect(run.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+    pending.resolve({ text: "late output" });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(fixture.discord.sentMessages).toEqual([]);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it.each(["다른 bot 상태 확인해 줘", "BOT 도와줘", "robot 이야기"])(
     "sends generic bot text through ambient judgment instead of a forced response: %s",
     async (content) => {

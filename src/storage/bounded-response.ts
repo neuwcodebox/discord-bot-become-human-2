@@ -3,10 +3,10 @@ export async function readBoundedResponse(response: Response, maxBytes: number):
   const advertisedSize = Number(response.headers.get("content-length"));
   if (advertisedSize > maxBytes) {
     await response.body?.cancel();
-    throw new Error("Image response exceeds the configured byte limit.");
+    throw new Error("Response exceeds the configured byte limit.");
   }
   const reader = response.body?.getReader();
-  if (!reader) throw new Error("Image response body is empty.");
+  if (!reader) throw new Error("Response body is empty.");
   const chunks: Uint8Array[] = [];
   let size = 0;
   let complete = false;
@@ -18,7 +18,7 @@ export async function readBoundedResponse(response: Response, maxBytes: number):
         return Buffer.concat(chunks);
       }
       size += value.byteLength;
-      if (size > maxBytes) throw new Error("Image response exceeds the configured byte limit.");
+      if (size > maxBytes) throw new Error("Response exceeds the configured byte limit.");
       chunks.push(value);
     }
   } finally {

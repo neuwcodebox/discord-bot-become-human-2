@@ -1,4 +1,5 @@
 import type { Message, TextBasedChannel } from "discord.js";
+import { AgentUnavailableError } from "../agent/availability.js";
 import { buildReactionContext, buildResponseContext } from "../agent/context-builder.js";
 import type { AgentRunner } from "../agent/runner.js";
 import type { AttachmentCache } from "../discord/attachment-cache.js";
@@ -172,7 +173,7 @@ export class ConversationResponder {
       );
       return sent?.id;
     } catch (error) {
-      if (!options.signal?.aborted) throw error;
+      if (!options.signal?.aborted && !(error instanceof AgentUnavailableError)) throw error;
       log.info({ guildId: workspace.guildId, channelId: discordMessage.channelId }, "agent reply cancelled");
       return writer?.lastMessageId;
     } finally {

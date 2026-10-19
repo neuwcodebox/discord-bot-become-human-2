@@ -16,6 +16,7 @@ describe("Codex model selection", () => {
         codex: {
           authPath: join(tmpdir(), `dbh2-missing-auth-${randomUUID()}.json`),
           transport: "auto",
+          usageLimit: { enabled: false, minRemainingPercent: 20, pollIntervalMs: 60_000 },
         },
       },
     });
@@ -37,6 +38,7 @@ describe("Codex model selection", () => {
           codex: {
             authPath: join(tmpdir(), `dbh2-missing-auth-${randomUUID()}.json`),
             transport: "auto",
+            usageLimit: { enabled: false, minRemainingPercent: 20, pollIntervalMs: 60_000 },
           },
         },
       });

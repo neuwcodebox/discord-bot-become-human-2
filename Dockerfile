@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM node:24-bookworm AS builder
+FROM node:24.22.1-bookworm AS builder
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -13,7 +13,7 @@ COPY . .
 RUN npm run build
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM node:24-bookworm-slim
+FROM node:24.22.1-bookworm-slim
 
 # System packages available to the bwrap sandbox (bound from /usr, /bin, /lib)
 # and general bot utilities.

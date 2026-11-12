@@ -208,11 +208,15 @@ export type HistoryEntry = {
   memoryTargets: string[];
 };
 
-export type AgentRole = "system" | "user" | "assistant" | "tool";
+export type AgentRole = "system" | "developer" | "user" | "assistant" | "tool";
 
 export type AgentContextMessage = {
   role: AgentRole;
   content: string;
+  /** Preserve this stable prefix as an explicit cache boundary when supported. */
+  cacheBreakpoint?: true;
+  /** Contiguous pieces share the pre-split context message character budget. */
+  budgetGroup?: string;
 };
 
 export type AgentRunRequest = {

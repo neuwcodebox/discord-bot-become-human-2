@@ -23,6 +23,17 @@ export function buildTranscript(
   return lines.join("\n");
 }
 
+/** Independent observed records: appending a message never changes earlier message endings. */
+export function buildTranscriptMessages(
+  events: NormalizedDiscordEvent[],
+  options: { guildId: string; channelId: string; timezone: string; botUserId: string },
+): string[] {
+  const header = `<transcript guild="${attr(options.guildId)}" channel="${attr(options.channelId)}" order="oldest_to_newest">`;
+  return materializeMessages(events).map((message) =>
+    [header, renderMessage(message, false, options.timezone, options.botUserId), "</transcript>"].join("\n"),
+  );
+}
+
 export function materializeMessages(events: NormalizedDiscordEvent[]): NormalizedDiscordMessage[] {
   const byId = new Map<string, NormalizedDiscordMessage>();
   for (const event of events) {

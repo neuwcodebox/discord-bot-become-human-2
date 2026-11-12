@@ -33,6 +33,34 @@ export function truncateText(value: string, limitChars: number): TruncatedText {
   };
 }
 
+/** Apply one character budget without erasing stable message boundaries. */
+export function truncateTextParts(parts: string[], limitChars: number): string[] {
+  const combined = parts.join("\n\n");
+  const capped = truncateText(combined, limitChars);
+  if (!capped.truncated) return parts.slice();
+  if (!capped.text) return [];
+  const prefix = combined.slice(0, Math.max(0, limitChars - truncationMarker.length));
+  let offset = 0;
+  const kept: string[] = [];
+  for (const [index, part] of parts.entries()) {
+    if (index > 0) {
+      if (offset + 2 >= prefix.length) {
+        const last = kept.length - 1;
+        if (last >= 0) kept[last] = `${kept[last]}${prefix.slice(offset)}`;
+        break;
+      }
+      offset += 2;
+    }
+    if (offset >= prefix.length) break;
+    kept.push(prefix.slice(offset, offset + part.length));
+    offset += part.length;
+  }
+  if (kept.length === 0) return [truncationMarker];
+  const last = kept.length - 1;
+  kept[last] = `${kept[last]}${truncationMarker}`;
+  return kept;
+}
+
 export function truncateUtf8(value: string, limitBytes: number): TruncatedBytes {
   const bytesRead = Buffer.byteLength(value, "utf8");
   if (limitBytes <= 0) {
@@ -69,32 +97,46 @@ export function normalizeContextMessages(
   config: AppConfig,
   contextWindow: number,
 ): AgentContextMessage[] {
-  const perMessageLimit = config.context.maxContextMessageChars;
-  const instructions = messages.filter((message) => message.role === "system");
-  const conversation = messages.filter((message) => message.role !== "system");
-  const cappedConversation = conversation.map((message) => ({
-    ...message,
-    content: truncateText(message.content, perMessageLimit).text,
-  }));
-  const budget = promptBudgetTokens(config, contextWindow);
-  if (estimateContextTokens([...instructions, ...cappedConversation]) <= budget) {
-    return [...instructions, ...cappedConversation];
-  }
-
-  let used = estimateContextTokens(instructions);
-  const kept: AgentContextMessage[] = [];
-  for (const message of [...cappedConversation].reverse()) {
-    const cost = estimateTokens(message.content) + 12;
-    if (kept.length > 0 && used + cost > budget) break;
-    kept.unshift(message);
-    used += cost;
-  }
-  if (kept.length === 0 && cappedConversation.length > 0) {
-    const latest = cappedConversation.at(-1);
-    if (latest) {
-      const remainingChars = Math.max(512, (budget - used) * 4);
-      kept.push({ ...latest, content: truncateText(latest.content, remainingChars).text });
+  // A split observation is still one logical budget unit. Splitting it into API
+  // messages must not multiply maxContextMessageChars or alter which older units
+  // are discarded. Developer instructions remain protected in their own position.
+  const groups: AgentContextMessage[][] = [];
+  for (const message of messages) {
+    const previous = groups.at(-1);
+    if (
+      message.budgetGroup &&
+      previous?.[0]?.budgetGroup === message.budgetGroup &&
+      previous.every((entry) => entry.role === message.role)
+    ) {
+      previous.push(message);
+    } else {
+      groups.push([message]);
     }
   }
-  return [...instructions, ...kept];
+  const instruction = (group: AgentContextMessage[]) =>
+    group.every((message) => message.role === "system" || message.role === "developer");
+  const capped = groups.map((group) => {
+    if (instruction(group)) return group;
+    const parts = truncateTextParts(
+      group.map((message) => message.content),
+      config.context.maxContextMessageChars,
+    );
+    return parts.flatMap((content, index) => {
+      const original = group[index];
+      return original ? [{ ...original, content }] : [];
+    });
+  });
+  const budget = promptBudgetTokens(config, contextWindow);
+  if (estimateContextTokens(capped.flat()) <= budget) return capped.flat();
+
+  let used = estimateContextTokens(capped.filter(instruction).flat());
+  const kept = new Set<AgentContextMessage[]>();
+  for (const group of [...capped].reverse()) {
+    if (instruction(group)) continue;
+    const cost = estimateContextTokens(group);
+    if (kept.size > 0 && used + cost > budget) break;
+    kept.add(group);
+    used += cost;
+  }
+  return capped.filter((group) => instruction(group) || kept.has(group)).flat();
 }

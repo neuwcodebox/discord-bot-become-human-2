@@ -21,6 +21,7 @@ import {
 import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from "../types.js";
 import { AgentUnavailableError } from "./availability.js";
 import { CodexUsageMonitor } from "./codex-usage.js";
+import { createPromptCachePayloadAdapter } from "./prompt-cache.js";
 import { loadCodexCredentials } from "./provider.js";
 import { AgentProviderError, sanitizeProviderError } from "./provider-error.js";
 import { bindAgentRunControl } from "./run-control.js";
@@ -121,6 +122,7 @@ export class OpenAICompatibleAgentRunner implements AgentRunner {
       provider: responses ? "openai" : "openai-compatible",
       baseUrl: this.config.llm.baseURL,
       reasoning: responses,
+      ...(responses ? { compat: { supportsMidConvoSystemMessages: true } } : {}),
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: this.config.llm.contextWindow,
@@ -162,14 +164,19 @@ async function runAgent(
 ): Promise<AgentRunResult> {
   const { messages, startedAt, langfuse } = opts;
 
+  const preserveTaskPosition =
+    model.api === "openai-responses" &&
+    model.provider === "openai" &&
+    /^https:\/\/api\.openai\.com\/v1\/?$/.test(model.baseUrl) &&
+    /^gpt-6(?:[.-]|$)/.test(model.id);
   const normalizedSystemPrompt = messages
-    .filter((message) => message.role === "system")
+    .filter((message) => message.role === "system" || (!preserveTaskPosition && message.role === "developer"))
     .map((message) => message.content)
     .join("\n\n");
   const prompts: AgentMessage[] = messages
-    .filter((message) => message.role === "user")
+    .filter((message) => message.role === "user" || (preserveTaskPosition && message.role === "developer"))
     .map((message) => ({
-      role: "user",
+      role: message.role === "developer" ? "system" : "user",
       content: [{ type: "text", text: message.content }],
       timestamp: Date.now(),
     }));
@@ -203,6 +210,9 @@ async function runAgent(
       return undefined;
     },
     streamFn: opts.streamFn,
+    ...(preserveTaskPosition
+      ? { onPayload: createPromptCachePayloadAdapter(messages, normalizedSystemPrompt) }
+      : {}),
     ...(opts.transport !== undefined ? { transport: opts.transport } : {}),
     transformContext: async (contextMessages) => {
       latestGenerationMessages = contextMessages.slice();

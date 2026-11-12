@@ -1612,15 +1612,30 @@ developer:
   - selected SKILL.md 전체
   - response guardrails: targetMessageIds 중심, 내부 JSON/schema 언급 금지, 필요한 경우에만 도구 사용,
     명시적 필요 없이 memory/workspace file write 금지
-  - current response task
 
 user:
   - memory/MEMORY.md 전체
   - relevant users/*/USER.md 전체
   - 시간순 transcript
-  - target messages
   - attachment/embed/link metadata
+
+developer (대화 뒤):
+  - current response task와 targetMessageIds
 ```
+
+응답 생성 시 고정 지침과 매번 달라지는 task를 분리한다. 메모리·아카이브 요약·프로필은 기존 순서로
+대화 앞에 두고, 각 Discord 메시지는 자체 완결된 transcript 블록의 독립 user 메시지로 보존한다.
+과거 메시지의 target 속성은 넣지 않고 마지막 task의 targetMessageIds로 응답 대상을 지정한다.
+수정·삭제·반응은 기존 materialization 규칙대로 해당 메시지에 반영한다. 분리된 관찰 메시지 전체에는
+기존 하나의 maxContextMessageChars 예산을 공유하며, transcript·memory·profile 한도와 잘림 방향은
+유지한다. 메시지별 API 오버헤드도 전체 context 예산 추정에 포함한다.
+
+공식 OpenAI GPT-6 Responses 경로는 SDK의 중간 system 메시지 지원을 켜서 마지막 task를 developer
+권한으로 제자리에 직렬화한다. 고정 지침의 input_text 끝에는 명시적 prompt_cache_breakpoint를 추가하고
+prompt_cache_options.mode는 implicit으로 유지해 이전 대화 및 도구 결과 경계도 재사용한다. 기존 session
+cache key를 유지하며 TTL은 API 기본값을 사용한다. 실제 재사용은 동일 prefix, 모델별 최소 길이, 캐시
+수명에 달려 있다. 타사 호환 API·기존 Chat Completions·Codex는 새 캐시 필드를 전송하지 않고, task를
+기존 system prompt에 합쳐 권한을 유지하는 호환 경로를 사용한다.
 
 ### 15.4 Dream
 
@@ -2128,7 +2143,9 @@ JS/TS SDK v5와 OpenTelemetry를 초기화한다. 키가 없으면 관측성은 
 - 비동기 pi 이벤트마다 부모 span context를 명시하고 `propagateAttributes`로 실행 이름과 sessionId를
   각 observation에 전파한다. 서로 다른 실행의 observation이 섞이지 않아야 한다.
 - 입력/최종 출력은 root observation에 기록한다. deprecated trace I/O 설정 API를 사용하지 않는다.
-- generation은 `usageDetails`와 `costDetails`를 기록한다. 기존 도구 오류·호출 횟수·성공률 등의
+- generation은 비캐시 입력 `input`, `input_cache_read`, `input_cache_write`, `output`을
+  겹치지 않는 `usageDetails` 항목으로 기록하며 total fallback에도 캐시 토큰을 포함한다.
+  `costDetails`는 제공된 가격 추정이 있을 때만 기록하고 all-zero 미정 가격표는 생략한다. 기존 도구 오류·호출 횟수·성공률 등의
   평가 점수는 `@langfuse/client`의 `score.create`로 동일 trace/observation ID에 연결한다.
 - `@langfuse/otel`의 `LangfuseSpanProcessor`를 `NodeSDK`에 등록하고 5초 간격으로 export한다.
   SIGINT/SIGTERM 종료 시 NodeSDK와 Langfuse client를 모두 shutdown해 대기 데이터를 flush한다.

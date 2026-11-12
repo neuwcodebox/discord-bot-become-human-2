@@ -557,10 +557,15 @@ function extractToolStatusMessage(result: unknown): string | undefined {
 }
 
 function usageDetails(message: Extract<AgentMessage, { role: "assistant" }>): Record<string, number> {
+  // pi normalizes input to uncached tokens for both Responses and Completions.
+  // Keep the categories disjoint so Langfuse never counts cached input twice.
+  const { input, output, cacheRead, cacheWrite, totalTokens } = message.usage;
   return {
-    input: message.usage.input || 0,
-    output: message.usage.output || 0,
-    total: message.usage.totalTokens || (message.usage.input || 0) + (message.usage.output || 0),
+    input: input || 0,
+    input_cache_read: cacheRead || 0,
+    input_cache_write: cacheWrite || 0,
+    output: output || 0,
+    total: totalTokens || (input || 0) + (cacheRead || 0) + (cacheWrite || 0) + (output || 0),
   };
 }
 
@@ -568,7 +573,9 @@ function costDetailsFromUsage(
   usage: Extract<AgentMessage, { role: "assistant" }>["usage"],
 ): Record<string, number> | undefined {
   const cost = usage.cost;
-  if (!cost) return undefined;
+  // Custom compatible models use an all-zero price table when prices are unknown.
+  // Omit that estimate instead of recording an authoritative zero-dollar charge.
+  if (!cost || Object.values(cost).every((value) => value === 0)) return undefined;
   return {
     total: cost.total,
     input: cost.input,

@@ -153,6 +153,7 @@ const configSchema = z.object({
   }),
   images: z
     .object({
+      openaiModel: z.string().trim().min(1).default("gpt-image-2.6-sunburst"),
       timeoutMs: z.number().int().positive().default(180_000),
       maxInputBytes: z
         .number()
@@ -167,7 +168,12 @@ const configSchema = z.object({
         .max(32 * 1024 * 1024)
         .default(20 * 1024 * 1024),
     })
-    .default({ timeoutMs: 180_000, maxInputBytes: 20 * 1024 * 1024, maxOutputBytes: 20 * 1024 * 1024 }),
+    .default({
+      openaiModel: "gpt-image-2.6-sunburst",
+      timeoutMs: 180_000,
+      maxInputBytes: 20 * 1024 * 1024,
+      maxOutputBytes: 20 * 1024 * 1024,
+    }),
   search: z
     .object({
       provider: z.literal("tavily"),
@@ -293,6 +299,7 @@ export const defaultConfig: AppConfig = {
     imageGeneration: true,
   },
   images: {
+    openaiModel: "gpt-image-2.6-sunburst",
     timeoutMs: 180_000,
     maxInputBytes: 20 * 1024 * 1024,
     maxOutputBytes: 20 * 1024 * 1024,

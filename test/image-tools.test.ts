@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { requestOpenAIImage } from "../src/agent/openai-images.js";
 import { defaultConfig } from "../src/config.js";
 import { AttachmentCache } from "../src/discord/attachment-cache.js";
 import { createToolRegistry } from "../src/tools/tool-registry.js";
@@ -296,7 +297,7 @@ describe("Codex OAuth image tools", () => {
   ])("does not persist malformed image responses", async (body) => {
     const { generate, fetchMock, workspaceRoot } = await setup();
     fetchMock.mockResolvedValue(Response.json(body));
-    await expect(generate.execute("call", { prompt: "whale" })).rejects.toThrow(/Codex/);
+    await expect(generate.execute("call", { prompt: "whale" })).rejects.toThrow(/Image provider/);
     expect(await savedImages(workspaceRoot)).toEqual([]);
   });
 
@@ -360,6 +361,172 @@ describe("Codex OAuth image tools", () => {
     const { generate, authPath, fetchMock } = await setup();
     await writeFile(authPath, JSON.stringify({ access_token: "private-invalid-token" }));
     await expect(generate.execute("call", { prompt: "whale" })).rejects.toThrow(/login:codex/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("OpenAI API image tools", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  async function setupAPI() {
+    const state = await setup();
+    const config: AppConfig = {
+      ...state.config,
+      llm: {
+        provider: "openai-compatible",
+        model: "chat-model-independent-of-images",
+        baseURL: "https://api.openai.com/v1/",
+        apiKeyEnv: "BOT_IMAGE_TEST_KEY",
+        contextWindow: 128000,
+        reasoning: "medium",
+      },
+    };
+    vi.stubEnv("BOT_IMAGE_TEST_KEY", "test-api-key");
+    await rm(state.authPath);
+    const tools = createToolRegistry(
+      config,
+      { guildId: "g1", workspaceRoot: state.workspaceRoot },
+      { attachmentCache: state.cache },
+    );
+    const generate = tools.find((t) => t.name === "generate_image");
+    const edit = tools.find((t) => t.name === "edit_image");
+    if (!generate || !edit) throw new Error("Missing API image tools");
+    return { ...state, config, generate, edit };
+  }
+
+  it("generates PNGs using the configured API key, latest image default and no OAuth", async () => {
+    const { generate, fetchMock, workspaceRoot } = await setupAPI();
+    const { metadata } = await executeImage(generate, { prompt: "a whale" });
+    expect(await readFile(join(workspaceRoot, metadata.path))).toEqual(png);
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      "https://api.openai.com/v1/images/generations",
+      expect.objectContaining({
+        redirect: "error",
+        headers: { Authorization: "Bearer test-api-key", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: "a whale",
+          quality: "auto",
+          size: "auto",
+          background: "auto",
+          model: "gpt-image-2.6-sunburst",
+          n: 1,
+          output_format: "png",
+        }),
+      }),
+    );
+  });
+
+  it("edits validated local and guild attachment images with the configured image model", async () => {
+    const { config, cache, workspaceRoot, fetchMock } = await setupAPI();
+    await writeFile(join(workspaceRoot, "source.png"), png);
+    rememberImage(cache);
+    fetchMock.mockResolvedValueOnce(new Response(png));
+    const edit = createToolRegistry(
+      { ...config, images: { ...config.images, openaiModel: "gpt-image-2.6-flare" } },
+      { guildId: "g1", workspaceRoot },
+      { attachmentCache: cache },
+    ).find((t) => t.name === "edit_image");
+    if (!edit) throw new Error("Missing edit tool");
+    await executeImage(edit, { prompt: "combine", images: ["source.png", "attachment://a1"] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://api.openai.com/v1/images/edits");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      model: "gpt-image-2.6-flare",
+      images: [
+        { image_url: `data:image/png;base64,${png.toString("base64")}` },
+        { image_url: `data:image/png;base64,${png.toString("base64")}` },
+      ],
+    });
+  });
+
+  it.each([
+    "https://example.com/v1",
+    "https://api.openai.com.evil.test/v1",
+    "http://api.openai.com/v1",
+    "https://user:password@api.openai.com/v1",
+    "https://api.openai.com/v1?secret=1",
+  ])("does not assume image support or transmit keys for %s", async (baseURL) => {
+    const { config, workspaceRoot, fetchMock } = await setupAPI();
+    if (config.llm.provider !== "openai-compatible") throw new Error("Expected compatible provider");
+    const tools = createToolRegistry(
+      { ...config, llm: { ...config.llm, baseURL } },
+      { guildId: "g1", workspaceRoot },
+    );
+    expect(tools.some((t) => t.name === "generate_image" || t.name === "edit_image")).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not register API image tools for restricted runs or when disabled", async () => {
+    const { config, workspaceRoot } = await setupAPI();
+    for (const tools of [
+      createToolRegistry(config, { guildId: "g1", workspaceRoot }, { writePolicy: () => {} }),
+      createToolRegistry(
+        { ...config, tools: { ...config.tools, imageGeneration: false } },
+        { guildId: "g1", workspaceRoot },
+      ),
+    ])
+      expect(tools.some((t) => t.name === "generate_image" || t.name === "edit_image")).toBe(false);
+  });
+
+  it("fails missing keys before a network call without falling back to OAuth", async () => {
+    const { generate, fetchMock } = await setupAPI();
+    vi.stubEnv("BOT_IMAGE_TEST_KEY", "");
+    await expect(generate.execute("call", { prompt: "whale" })).rejects.toThrow(/API key is missing/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 403, 429, 500])("redacts HTTP %s errors and does not retry or save", async (status) => {
+    const { generate, fetchMock, workspaceRoot } = await setupAPI();
+    fetchMock.mockResolvedValue(new Response("private-prompt test-api-key", { status }));
+    await expect(generate.execute("call", { prompt: "whale" })).rejects.toThrow(`HTTP ${status}`);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(await savedImages(workspaceRoot)).toEqual([]);
+  });
+
+  it("rejects traversal and malformed responses without saving", async () => {
+    const { generate, edit, fetchMock, workspaceRoot } = await setupAPI();
+    await expect(edit.execute("call", { prompt: "whale", images: ["../outside.png"] })).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockResolvedValue(Response.json({ data: [{ b64_json: "!!!" }] }));
+    await expect(generate.execute("call", { prompt: "whale" })).rejects.toThrow(/invalid image/);
+    expect(await savedImages(workspaceRoot)).toEqual([]);
+  });
+
+  it("rejects API data URLs over the documented per-image character limit before fetch", async () => {
+    const { config, fetchMock } = await setupAPI();
+    if (config.llm.provider !== "openai-compatible") throw new Error("Expected API config");
+    await expect(
+      requestOpenAIImage(
+        config.llm,
+        config.images.openaiModel,
+        {
+          prompt: "edit",
+          images: [{ image_url: `data:image/png;base64,${"A".repeat(20_971_520)}` }],
+        },
+        config.images.maxOutputBytes,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/data URL limit/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds API output bytes and leaves no output on failure", async () => {
+    const { config, workspaceRoot } = await setupAPI();
+    const tool = createToolRegistry(
+      { ...config, images: { ...config.images, maxOutputBytes: png.length - 1 } },
+      { guildId: "g1", workspaceRoot },
+    ).find((t) => t.name === "generate_image");
+    if (!tool) throw new Error("Missing image tool");
+    await expect(tool.execute("call", { prompt: "whale" })).rejects.toThrow(/byte limit/);
+    expect(await savedImages(workspaceRoot)).toEqual([]);
+  });
+
+  it("honors cancellation before requests", async () => {
+    const { generate, fetchMock } = await setupAPI();
+    await expect(generate.execute("call", { prompt: "whale" }, AbortSignal.abort())).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

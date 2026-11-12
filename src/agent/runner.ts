@@ -8,6 +8,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import { hasApi } from "@earendil-works/pi-ai";
 import { streamSimple as streamOpenAICodex } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { streamSimple as streamOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
+import { streamSimple as streamOpenAIResponses } from "@earendil-works/pi-ai/api/openai-responses";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import type { CodexLlmConfig, OpenAICompatLlmConfig } from "../config.js";
 import { normalizeContextMessages, truncateText } from "../context/limits.js";
@@ -21,6 +22,7 @@ import type { AgentRunRequest, AgentRunResult, AppConfig, RuntimeModel } from ".
 import { AgentUnavailableError } from "./availability.js";
 import { CodexUsageMonitor } from "./codex-usage.js";
 import { loadCodexCredentials } from "./provider.js";
+import { AgentProviderError, sanitizeProviderError } from "./provider-error.js";
 import { bindAgentRunControl } from "./run-control.js";
 
 const log = childLogger("agent-runner");
@@ -31,6 +33,7 @@ const codexStream: StreamFn = (model, context, options) => {
 };
 
 const openAICompatibleStream: StreamFn = (model, context, options) => {
+  if (hasApi(model, "openai-responses")) return streamOpenAIResponses(model, context, options);
   if (!hasApi(model, "openai-completions")) throw new Error(`Unsupported OpenAI API: ${model.api}`);
   return streamOpenAICompletions(model, context, options);
 };
@@ -106,13 +109,18 @@ export class OpenAICompatibleAgentRunner implements AgentRunner {
   async run(request: AgentRunRequest): Promise<AgentRunResult> {
     request.signal?.throwIfAborted();
     const startedAt = Date.now();
+    // GPT-6 function tools with reasoning require Responses on the official endpoint.
+    // Do not assume third-party OpenAI-compatible services implement this protocol.
+    const responses =
+      /^https:\/\/api\.openai\.com\/v1\/?$/.test(this.config.llm.baseURL) &&
+      /^gpt-6(?:[.-]|$)/.test(this.config.llm.model);
     const model: RuntimeModel = {
       id: this.config.llm.model,
       name: this.config.llm.model,
-      api: "openai-completions",
-      provider: "openai-compatible",
+      api: responses ? "openai-responses" : "openai-completions",
+      provider: responses ? "openai" : "openai-compatible",
       baseUrl: this.config.llm.baseURL,
-      reasoning: false,
+      reasoning: responses,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: this.config.llm.contextWindow,
@@ -257,6 +265,11 @@ async function runAgent(
   } finally {
     unbind();
   }
+  const terminalAssistant = findLatestAssistantMessage(agent.state.messages);
+  if (terminalAssistant?.stopReason === "error" || terminalAssistant?.stopReason === "aborted") {
+    langfuseObserver?.finish(finalText, agent.state.messages);
+    throw new AgentProviderError(terminalAssistant.errorMessage);
+  }
   if (!request.allowEmptyText && finalText.trim().length === 0) {
     const latestAssistant = findLatestAssistantMessage(agent.state.messages);
     const stateText = latestAssistant ? extractAssistantText(latestAssistant) : "";
@@ -372,6 +385,6 @@ function summarizeAssistantMessage(message: Extract<AgentMessage, { role: "assis
     thinkingPartCount: thinkingParts.length,
     toolCallNames: toolCalls.map((part) => part.name),
   };
-  if (message.errorMessage) summary.errorMessage = message.errorMessage;
+  if (message.errorMessage) summary.errorMessage = sanitizeProviderError(message.errorMessage);
   return summary;
 }

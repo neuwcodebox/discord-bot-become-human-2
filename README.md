@@ -531,3 +531,10 @@ LOG_LEVEL=debug npm run dev
 
 - [pi](https://github.com/earendil-works/pi) — 에이전트 실행 코어 및 OpenAI Codex provider
 - [nanobot](https://github.com/HKUDS/nanobot) — workspace 기반 장기 기억, Dream memory lifecycle, skill 구조 설계에 영향을 받았습니다
+
+### Official OpenAI GPT-6 tool requests
+
+With `llm.provider: "openai-compatible"`, the official `https://api.openai.com/v1` endpoint
+and a GPT-6-family model use Responses API automatically, preserving `llm.reasoning` and tool support.
+Other compatible endpoints and older models retain Chat Completions. Provider request errors are
+reported in operational logs and Langfuse, not retried as tool-less conversational replies.

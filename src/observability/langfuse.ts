@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
+import { sanitizeProviderError } from "../agent/provider-error.js";
 import type { AgentContextMessage } from "../types.js";
 
 const MAX_UPDATE_EVENTS_PER_TOOL = 5;
@@ -26,6 +27,8 @@ export type LangfuseSpanEndBody = {
 };
 
 export type LangfuseGenerationEndBody = {
+  level?: ObservationLevel;
+  statusMessage?: string;
   output?: unknown;
   metadata?: Record<string, unknown>;
   usageDetails?: Record<string, number>;
@@ -139,6 +142,7 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
   let eventOrder = 0;
   let toolCallCount = 0;
   let errorCount = 0;
+  let providerErrorCount = 0;
   let turnCount = 0;
   let completed = false;
 
@@ -197,6 +201,11 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
       },
       usageDetails: usage,
     };
+    if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
+      providerErrorCount += 1;
+      endBody.level = "ERROR";
+      endBody.statusMessage = sanitizeProviderError(event.message.errorMessage);
+    }
     if (costDetails) endBody.costDetails = costDetails;
     generation.generation.end(endBody);
     activeGeneration = null;
@@ -307,7 +316,7 @@ export function createLangfuseAgentObserver(options: LangfuseAgentObserverOption
     }
 
     const toolActivity = summarizeAgentToolActivity(messages);
-    const scores = computeEvaluationScores(toolCallCount, errorCount, turnCount);
+    const scores = computeEvaluationScores(toolCallCount, errorCount, turnCount, providerErrorCount);
     trace.update({
       output: finalText,
       metadata: {
@@ -569,13 +578,18 @@ function costDetailsFromUsage(
   };
 }
 
-function computeEvaluationScores(toolCallCount: number, errorCount: number, turnCount: number) {
+function computeEvaluationScores(
+  toolCallCount: number,
+  errorCount: number,
+  turnCount: number,
+  providerErrorCount: number,
+) {
   return {
     tool_call_count: toolCallCount,
     turn_count: turnCount,
     total_tool_errors: errorCount,
     tool_success_rate: toolCallCount > 0 ? (toolCallCount - errorCount) / toolCallCount : 1,
-    session_had_errors: errorCount > 0 ? 1 : 0,
+    session_had_errors: errorCount + providerErrorCount > 0 ? 1 : 0,
   };
 }
 

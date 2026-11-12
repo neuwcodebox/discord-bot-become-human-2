@@ -1,4 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
+import { supportsOpenAIImages } from "../agent/openai-images.js";
 import type { AppConfig, RuntimeAgentTool, ToolContext } from "../types.js";
 import { readAttachmentToolContent } from "./attachment.js";
 import { createDiscordActionTools } from "./discord-action-tools.js";
@@ -17,7 +18,11 @@ export function createToolRegistry(
   integrations: ToolIntegrations = {},
 ): RuntimeAgentTool[] {
   const tools: RuntimeAgentTool[] = [];
-  if (config.tools.imageGeneration && config.llm.provider === "openai-codex" && !integrations.writePolicy) {
+  if (
+    config.tools.imageGeneration &&
+    (config.llm.provider === "openai-codex" || supportsOpenAIImages(config.llm)) &&
+    !integrations.writePolicy
+  ) {
     tools.push(...createImageTools(config.llm, config.images, context, integrations.attachmentCache));
   }
   if (config.tools.workspaceFiles) {

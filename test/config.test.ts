@@ -30,6 +30,7 @@ describe("config parsing", () => {
     const parsed = parseConfig({ ...oldConfig, tools });
     expect(parsed.tools.imageGeneration).toBe(true);
     expect(parsed.images).toEqual({
+      openaiModel: "gpt-image-2.6-sunburst",
       timeoutMs: 180_000,
       maxInputBytes: 20 * 1024 * 1024,
       maxOutputBytes: 20 * 1024 * 1024,

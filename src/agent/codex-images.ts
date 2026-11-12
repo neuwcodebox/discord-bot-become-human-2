@@ -1,41 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { z } from "zod";
 import { childLogger } from "../logger.js";
-import { readBoundedResponse } from "../storage/bounded-response.js";
-import { imageMimeType } from "../storage/image-format.js";
+import { type ImagePayload, imagePayloadSchema, readImageResponse } from "./image-response.js";
 import { loadCodexAccountCredentials } from "./provider.js";
 
+export type { ImageOptions as CodexImageOptions } from "./image-response.js";
+
 const log = childLogger("codex-images");
-const imageOptionsSchema = z.object({
-  prompt: z.string().trim().min(1).max(32_000),
-  quality: z.enum(["auto", "low", "medium", "high"]).default("auto"),
-  size: z.enum(["auto", "1024x1024", "1536x1024", "1024x1536"]).default("auto"),
-  background: z.enum(["auto", "opaque", "transparent"]).default("auto"),
-});
-// HTTP payload built by the runtime; agent tools accept file paths or attachment references.
-const codexImagePayloadSchema = imageOptionsSchema.extend({
-  images: z
-    .array(z.object({ image_url: z.string().startsWith("data:image/") }))
-    .min(1)
-    .max(5)
-    .optional(),
-});
-const imageResponseSchema = z.object({
-  data: z.array(z.object({ b64_json: z.string().min(1) })).length(1),
-});
-
-export type CodexImageOptions = z.input<typeof imageOptionsSchema>;
-type CodexImagePayload = z.input<typeof codexImagePayloadSchema>;
-
 /** Uses the same ChatGPT OAuth provider/auth and JSON Images API as the official Codex client. */
 export async function requestCodexImage(
   authPath: string,
-  input: CodexImagePayload,
+  input: ImagePayload,
   maxOutputBytes: number,
   signal: AbortSignal,
 ): Promise<Buffer> {
   signal.throwIfAborted();
-  const request = codexImagePayloadSchema.parse(input);
+  const request = imagePayloadSchema.parse(input);
   const { accessToken, accountId } = await loadCodexAccountCredentials(authPath, signal);
   signal.throwIfAborted();
   const operation = request.images ? "edits" : "generations";
@@ -76,23 +55,5 @@ export async function requestCodexImage(
     // Provider error bodies may echo prompts, inputs, or auth details. Never expose them.
     throw new Error(`Codex image request failed (HTTP ${response.status}). ${hint}`);
   }
-  const raw = await readBoundedResponse(response, 4 * Math.ceil(maxOutputBytes / 3) + 65_536);
-  let encoded: string;
-  try {
-    const parsed = imageResponseSchema.parse(JSON.parse(raw.toString("utf8")));
-    const image = parsed.data[0];
-    if (!image) throw new Error("Missing image");
-    encoded = image.b64_json;
-  } catch {
-    throw new Error("Codex returned an invalid image response.");
-  }
-  if (encoded.length > 4 * Math.ceil(maxOutputBytes / 3)) {
-    throw new Error("Generated image exceeds the configured byte limit.");
-  }
-  const bytes = Buffer.from(encoded, "base64");
-  if (bytes.toString("base64") !== encoded) throw new Error("Codex returned invalid image encoding.");
-  if (bytes.length > maxOutputBytes) throw new Error("Generated image exceeds the configured byte limit.");
-  if (imageMimeType(bytes) !== "image/png") throw new Error("Codex did not return a PNG image.");
-  signal.throwIfAborted();
-  return bytes;
+  return readImageResponse(response, maxOutputBytes, signal);
 }

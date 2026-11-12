@@ -329,6 +329,7 @@ workspace template 복사는 guild workspace에만 적용된다. `resources/AGEN
     "imageGeneration": true
   },
   "images": {
+    "openaiModel": "gpt-image-2.6-sunburst",
     "timeoutMs": 180000,
     "maxInputBytes": 20971520,
     "maxOutputBytes": 20971520
@@ -1104,11 +1105,13 @@ type ToolContext = {
 ### 12.1 이미지 생성과 편집
 
 `tools.imageGeneration`의 기본값은 `true`이며, 기존 config에서 생략해도 활성화된다.
-`llm.provider`가 `openai-codex`일 때만 `generate_image`와 `edit_image`를 등록한다.
+`llm.provider`가 `openai-codex`이거나, `openai-compatible`이면서 `llm.baseURL`이
+정확히 `https://api.openai.com/v1` (끝의 `/` 허용)이면 `generate_image`와 `edit_image`를 등록한다.
+다른 OpenAI-compatible 서버에는 Images API 지원을 가정하지 않으며 도구를 등록하지 않는다.
 제한된 write policy를 사용하는 Dream에는 등록하지 않으며, reaction/decision run에도 제공하지 않는다.
 이미지 생성·편집은 응답 대화에서 요청한 이미지 작업에만 사용한다.
 
-인증은 대화와 같은 `llm.codex.authPath`를 읽고 만료 시 기존 OAuth 갱신 흐름을 사용한다.
+Codex 경로의 인증은 대화와 같은 `llm.codex.authPath`를 읽고 만료 시 기존 OAuth 갱신 흐름을 사용한다.
 API 키 환경변수나 현재 디렉터리의 `auth.json`으로 fallback하지 않는다. OAuth access token의
 `https://api.openai.com/auth.chatgpt_account_id` claim을 검증해 account header를 구성한다.
 인증 파일 경로, token, 요청 body, base64 이미지와 provider 오류 body를 도구 결과나 동작 로그에 넣지 않는다.
@@ -1123,6 +1126,27 @@ ChatGPT-Account-ID: <account id>
 model: gpt-image-2
 n: 1
 ```
+
+일반 OpenAI API 경로는 OAuth가 아닌 `llm.apiKeyEnv`의 API 키만 읽고 다음 endpoint를 사용한다.
+
+```txt
+POST https://api.openai.com/v1/images/generations
+POST https://api.openai.com/v1/images/edits
+Authorization: Bearer <API key>
+model: images.openaiModel (기본 gpt-image-2.6-sunburst)
+n: 1
+output_format: png
+```
+
+생성·편집 모두 JSON 요청이며 편집은 검증된 data URL의 `images` 배열을 사용한다.
+일반 OpenAI API의 개별 data URL은 20,971,520자를 초과하면 전송 전에 거절한다.
+이 모델은 대화 모델 `llm.model`과 독립적이다. 기존 설정에 `images.openaiModel`이 없으면 기본값을
+채우며 명시적인 모델 설정은 유지한다. API 사용량은 ChatGPT 구독과 별도 과금되며, 모델 접근 권한과
+조직 인증이 필요할 수 있다. API 키가 없으면 호출 전에 실패하고 OAuth로 fallback하지 않는다.
+401은 API 키, 403은 프로젝트 모델 접근·조직 인증, 429는 API quota·billing·rate limit을 안내한다.
+2026-11-12 공식 [모델 문서](https://developers.openai.com/api/docs/models/gpt-image-2.6-sunburst)와
+[Images API](https://developers.openai.com/api/reference/resources/images/methods/edit)에서
+생성·편집 지원을 확인했다. Codex OAuth의 `gpt-image-2` 경로는 별개로 유지한다.
 
 `generate_image` 입력은 `prompt`와 선택적인 `quality`, `size`, `background`다.
 `prompt`는 공백만으로 이루어질 수 없으며 최대 32,000자다.
@@ -1148,10 +1172,10 @@ Discord 첨부는 HTTPS `cdn.discordapp.com`/`media.discordapp.net`에서만 가
 
 입력 로드부터 API 응답·저장까지 `images.timeoutMs`(기본 180,000 ms)와 run AbortSignal을 적용한다.
 HTTP 응답을 읽을 때도 크기를 제한하고, 초과한 stream은 취소한다. 취소·실패 시 부분 파일을 남기지 않으며
-이미 완료된 원격 생성은 되돌리지 않는다. 구독 한도를 중복 소비하지 않도록 자동 재시도하지 않는다.
-401은 OAuth 재로그인, 403은 계정/workspace 지원 여부, 429는 사용 한도·속도 제한으로 안내한다.
+이미 완료된 원격 생성은 되돌리지 않는다. 구독 한도나 API 비용을 중복 소비하지 않도록 자동 재시도하지 않는다.
+Codex의 401은 OAuth 재로그인, 403은 계정/workspace 지원 여부, 429는 사용 한도·속도 제한으로 안내한다.
 `images.maxInputBytes`/`maxOutputBytes`의 설정 상한은 각각 32 MiB다. 이 도구의 네트워크 접근은
-`sandbox.network`와 별개이며, API 키로 우회하지 않는다.
+`sandbox.network`와 별개이며, 설정한 인증 경로 사이에 fallback하지 않는다.
 
 요청 형식 기준: [공식 Codex 이미지 클라이언트](https://github.com/openai/codex/blob/4eb4a65407d98cebc4c83bf13be440b9fbc78a7c/codex-rs/codex-api/src/endpoint/images.rs),
 [공식 Codex 이미지 도구](https://github.com/openai/codex/blob/4eb4a65407d98cebc4c83bf13be440b9fbc78a7c/codex-rs/ext/image-generation/src/tool.rs).

@@ -355,7 +355,12 @@ description: 언제 이 스킬을 써야 하는지 — 예: "Use this skill when
 | `readAttachment` | 메시지 첨부 파일 읽기 |
 | `sandboxExec` | 샌드박스 코드 실행 |
 | `searchInternet` | 인터넷 검색 (`search` 설정도 필요) |
-| `imageGeneration` | Codex OAuth로 이미지 생성·편집 (`openai-codex`에서만 제공) |
+| `imageGeneration` | Codex OAuth 또는 공식 OpenAI API로 이미지 생성·편집 |
+
+일반 OpenAI API 이미지 도구는 `llm.provider: "openai-compatible"`,
+`llm.baseURL: "https://api.openai.com/v1"`에서 대화와 같은 `llm.apiKeyEnv` 키를 사용합니다.
+`images.openaiModel` 기본값은 `gpt-image-2.6-sunburst`이며 대화 모델과 별개입니다.
+API 이미지 사용량은 ChatGPT 구독과 별도 과금됩니다. 다른 호환 서버에는 자동으로 활성화하지 않습니다.
 
 ### sandbox
 

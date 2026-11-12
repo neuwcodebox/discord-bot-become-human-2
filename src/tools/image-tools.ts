@@ -3,8 +3,9 @@ import { constants } from "node:fs";
 import { mkdir, open, unlink } from "node:fs/promises";
 import { dirname, relative } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
-import { type CodexImageOptions, requestCodexImage } from "../agent/codex-images.js";
-import type { CodexLlmConfig } from "../config.js";
+import { requestCodexImage } from "../agent/codex-images.js";
+import type { ImageOptions } from "../agent/image-response.js";
+import { requestOpenAIImage } from "../agent/openai-images.js";
 import type { AttachmentCache } from "../discord/attachment-cache.js";
 import { assertInsideWorkspace } from "../paths/workspace-guard.js";
 import type { AppConfig, RuntimeAgentTool, ToolContext } from "../types.js";
@@ -30,7 +31,7 @@ const optionProperties = {
 };
 
 export function createImageTools(
-  llm: CodexLlmConfig,
+  llm: AppConfig["llm"],
   limits: AppConfig["images"],
   context: ToolContext,
   attachments?: AttachmentCache,
@@ -71,10 +72,10 @@ export function createImageTools(
 }
 
 async function runImageRequest(
-  llm: CodexLlmConfig,
+  llm: AppConfig["llm"],
   limits: AppConfig["images"],
   context: ToolContext,
-  input: CodexImageOptions,
+  input: ImageOptions,
   references: string[] | undefined,
   attachments: AttachmentCache | undefined,
   externalSignal: AbortSignal | undefined,
@@ -95,18 +96,17 @@ async function runImageRequest(
   await mkdir(dirname(path), { recursive: true });
   await assertInsideWorkspace(root, path);
   signal.throwIfAborted();
-  const bytes = await requestCodexImage(
-    llm.codex.authPath,
-    {
-      prompt: input.prompt,
-      ...(input.quality !== undefined ? { quality: input.quality } : {}),
-      ...(input.size !== undefined ? { size: input.size } : {}),
-      ...(input.background !== undefined ? { background: input.background } : {}),
-      ...(references ? { images: images.map((image_url) => ({ image_url })) } : {}),
-    },
-    limits.maxOutputBytes,
-    signal,
-  );
+  const payload = {
+    prompt: input.prompt,
+    ...(input.quality !== undefined ? { quality: input.quality } : {}),
+    ...(input.size !== undefined ? { size: input.size } : {}),
+    ...(input.background !== undefined ? { background: input.background } : {}),
+    ...(references ? { images: images.map((image_url) => ({ image_url })) } : {}),
+  };
+  const bytes =
+    llm.provider === "openai-codex"
+      ? await requestCodexImage(llm.codex.authPath, payload, limits.maxOutputBytes, signal)
+      : await requestOpenAIImage(llm, limits.openaiModel, payload, limits.maxOutputBytes, signal);
   await assertInsideWorkspace(root, path);
   signal.throwIfAborted();
   const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);

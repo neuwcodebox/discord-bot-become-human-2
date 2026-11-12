@@ -105,6 +105,25 @@ class FakeLangfuse implements LangfuseAgentClient {
 }
 
 describe("langfuse observability", () => {
+  it("marks provider errors with redacted diagnostics", async () => {
+    const { observer, trace } = createObserver({});
+    const message = {
+      ...assistantMessage([]),
+      stopReason: "error" as const,
+      errorMessage: "400 invalid reasoning_effort api_key=secret",
+    };
+    await observer.handleEvent({ type: "message_start", message });
+    await observer.handleEvent({ type: "message_end", message });
+    expect(trace.generations[0]?.ended?.level).toBe("ERROR");
+    expect(trace.generations[0]?.ended?.statusMessage).toContain("invalid reasoning_effort");
+    expect(trace.generations[0]?.ended?.statusMessage).not.toContain("secret");
+    observer.finish("", [message]);
+    expect(trace.updates.at(-1)?.metadata).toMatchObject({
+      session_had_errors: 1,
+      total_tool_errors: 0,
+      tool_success_rate: 1,
+    });
+  });
   it("records assistant generations before repeated tool spans in pi-agent event order", async () => {
     const { observer, trace } = createObserver({
       traceLabel: "response",

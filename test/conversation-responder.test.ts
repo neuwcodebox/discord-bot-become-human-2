@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentUnavailableError } from "../src/agent/availability.js";
+import { AgentProviderError } from "../src/agent/provider-error.js";
 import type { AgentRunner } from "../src/agent/runner.js";
 import { defaultConfig } from "../src/config.js";
 import { ConversationResponder } from "../src/conversation/responder.js";
@@ -20,6 +21,15 @@ import { createTestWorkspace } from "./helpers/workspace.js";
 afterEach(() => vi.useRealTimers());
 
 describe("conversation responder", () => {
+  it("does not disguise provider errors as empty replies or send canned diagnostics", async () => {
+    const run = vi.fn<AgentRunner["run"]>().mockRejectedValue(new AgentProviderError("400 invalid request"));
+    const fixture = await createFixture({ run });
+    await expect(
+      fixture.responder.reply(fixture.task, fixture.events, fixture.workspace, fixture.discord.message),
+    ).rejects.toBeInstanceOf(AgentProviderError);
+    expect(run).toHaveBeenCalledOnce();
+    expect(fixture.discord.sentMessages).toEqual([]);
+  });
   it("does not retry or send a fallback when the subscription gate pauses a reply", async () => {
     const run = vi.fn<AgentRunner["run"]>().mockRejectedValue(new AgentUnavailableError());
     const fixture = await createFixture({ run });

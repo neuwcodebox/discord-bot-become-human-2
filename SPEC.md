@@ -2380,7 +2380,16 @@ Use two core engagement states: `not_engaged` and `engaged`. In `not_engaged`, d
 
 Response generation and Dream memory management use the pi agent harness in ReAct style. Stream response text into Discord by creating a placeholder message, editing it as deltas arrive, and opening the next message immediately when the current one approaches the length limit.
 
-If a response generation run completes with empty text, the runtime treats it as an invalid reply result. It logs the
+Official OpenAI GPT-6-family models use the Responses API, retaining the configured reasoning effort
+and function tools. Other OpenAI-compatible endpoints and older model routes retain Chat Completions;
+Codex authentication and transport are unchanged.
+
+Provider error/aborted terminal messages propagate as failures rather than entering empty-reply recovery,
+even if they contain partial text. No tools are replayed and no fixed diagnostic reply is posted to Discord.
+Langfuse records ERROR status and bounded credential-redacted error detail for operator diagnosis.
+Explicit user cancellation remains silent.
+
+If a response generation run completes successfully with empty text, the runtime treats it as an invalid reply result. It logs the
 assistant message summary for debugging, retries once with tools disabled and a strict plain-text reply instruction,
 and only then falls back to a short visible failure message instead of leaving the streaming placeholder in Discord.
 

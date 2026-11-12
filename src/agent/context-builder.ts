@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { block, sections } from "../context/format.js";
-import { truncateText } from "../context/limits.js";
-import { buildTranscript, materializeMessages } from "../conversation/transcript-builder.js";
+import { truncateText, truncateTextParts } from "../context/limits.js";
+import {
+  buildTranscript,
+  buildTranscriptMessages,
+  materializeMessages,
+} from "../conversation/transcript-builder.js";
 import type {
   ActiveResponseSnapshot,
   AgentContextMessage,
@@ -117,17 +121,31 @@ export async function buildResponseContext(input: {
       input.config.conversation.maxParticipantsForProfileLoad,
     ),
   ]);
-  const transcript = buildTranscript(input.events, {
-    guildId: latest?.guildId ?? "unknown",
-    channelId: latest?.channelId ?? "unknown",
-    targetMessageIds: input.targetMessageIds,
-    timezone: input.config.runtime.timezone,
-    botUserId: input.botIdentity.userId,
-  });
-  const cappedTranscript = truncateText(transcript, input.config.context.maxTranscriptChars).text;
+  const transcript = truncateTextParts(
+    buildTranscriptMessages(input.events, {
+      guildId: latest?.guildId ?? "unknown",
+      channelId: latest?.channelId ?? "unknown",
+      timezone: input.config.runtime.timezone,
+      botUserId: input.botIdentity.userId,
+    }),
+    input.config.context.maxTranscriptChars,
+  );
+  const background = sections(
+    block("memory", truncateText(memory.guildMemory, input.config.context.maxMemoryChars).text),
+    block("archive_summaries", archiveSummaries),
+    profiles.length > 0
+      ? `<user_profiles>\n${profiles
+          .map(
+            (profile) =>
+              `<profile uid="${profile.userId}">\n${truncateText(profile.profile, input.config.context.maxUserProfileChars).text.trim()}\n</profile>`,
+          )
+          .join("\n")}\n</user_profiles>`
+      : undefined,
+  );
   return [
     {
       role: "system",
+      cacheBreakpoint: true,
       content: sections(
         `Reply to the selected Discord messages. Use available tools when useful. Default language: ${input.config.runtime.defaultLocale} (SOUL.md speaking style takes priority). Return only the message text that should be sent to Discord.`,
         block("instructions", agents),
@@ -147,24 +165,20 @@ export async function buildResponseContext(input: {
           ),
         ),
         block("guardrails", responseGuardrails),
-        block("task", JSON.stringify(input.task, null, 2)),
       ),
     },
+    ...[...(background ? [background] : []), ...transcript].map(
+      (content): AgentContextMessage => ({
+        role: "user",
+        content,
+        budgetGroup: "response-observations",
+      }),
+    ),
     {
-      role: "user",
-      content: sections(
-        block("memory", truncateText(memory.guildMemory, input.config.context.maxMemoryChars).text),
-        block("archive_summaries", archiveSummaries),
-        profiles.length > 0
-          ? `<user_profiles>\n${profiles
-              .map(
-                (profile) =>
-                  `<profile uid="${profile.userId}">\n${truncateText(profile.profile, input.config.context.maxUserProfileChars).text.trim()}\n</profile>`,
-              )
-              .join("\n")}\n</user_profiles>`
-          : undefined,
-        cappedTranscript,
-      ),
+      role: "developer",
+      content:
+        block("task", JSON.stringify({ ...input.task, targetMessageIds: input.targetMessageIds }, null, 2)) ??
+        "",
     },
   ];
 }

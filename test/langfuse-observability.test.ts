@@ -105,6 +105,52 @@ class FakeLangfuse implements LangfuseAgentClient {
 }
 
 describe("langfuse observability", () => {
+  it.each(["openai-responses", "openai-completions"] as const)(
+    "records disjoint cache token categories for %s without inventing costs",
+    async (api) => {
+      const { observer, trace } = createObserver({});
+      const message = assistantMessage([{ type: "text", text: "done" }]);
+      message.api = api;
+      message.usage = {
+        input: 100,
+        output: 20,
+        cacheRead: 1000,
+        cacheWrite: 200,
+        totalTokens: 1320,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+      await observer.handleEvent({ type: "message_start", message });
+      await observer.handleEvent({ type: "message_end", message });
+      expect(trace.generations[0]?.ended?.usageDetails).toEqual({
+        input: 100,
+        input_cache_read: 1000,
+        input_cache_write: 200,
+        output: 20,
+        total: 1320,
+      });
+      expect(trace.generations[0]?.ended?.costDetails).toBeUndefined();
+    },
+  );
+
+  it("includes cache reads and writes in a missing total without changing reported costs", async () => {
+    const { observer, trace } = createObserver({});
+    const message = assistantMessage([]);
+    message.usage.cacheRead = 40;
+    message.usage.cacheWrite = 30;
+    message.usage.totalTokens = 0;
+    message.usage.cost = { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0.004, total: 0.037 };
+    await observer.handleEvent({ type: "message_start", message });
+    await observer.handleEvent({ type: "message_end", message });
+    expect(trace.generations[0]?.ended?.usageDetails).toEqual({
+      input: 10,
+      input_cache_read: 40,
+      input_cache_write: 30,
+      output: 4,
+      total: 84,
+    });
+    expect(trace.generations[0]?.ended?.costDetails).toEqual(message.usage.cost);
+  });
+
   it("marks provider errors with redacted diagnostics", async () => {
     const { observer, trace } = createObserver({});
     const message = {

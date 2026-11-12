@@ -397,5 +397,8 @@ async function writeWorkspaceFile(workspaceRoot: string, relativePath: string, c
 }
 
 function messageContent(messages: AgentContextMessage[], role: AgentRole): string {
-  return messages.find((message) => message.role === role)?.content ?? "";
+  return messages
+    .filter((message) => message.role === role)
+    .map((message) => message.content)
+    .join("\n\n");
 }

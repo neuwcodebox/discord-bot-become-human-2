@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { AgentProviderError, sanitizeProviderError } from "../src/agent/provider-error.js";
 import { OpenAICompatibleAgentRunner } from "../src/agent/runner.js";
 import { defaultConfig } from "../src/config.js";
 import { createToolRegistry } from "../src/tools/tool-registry.js";
+import type { AgentContextMessage } from "../src/types.js";
 
 const failure =
   "Function tools with reasoning_effort are not supported for gpt-6.1-sol in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.";
@@ -83,7 +85,7 @@ describe("OpenAI transport and failures", () => {
     vi.stubGlobal("fetch", fetcher);
     const result = await runner.run({
       sessionId: "roundtrip",
-      messages: [{ role: "user", content: "Draw" }],
+      messages: [...fixedMessages, taskA],
       tools: [{ ...image, execute }],
     });
     expect(result.text).toBe("Done");
@@ -95,6 +97,20 @@ describe("OpenAI transport and failures", () => {
     expect(continuation).toContain('"id":"fc_1"');
     expect(continuation).toContain("generated/images/test.png");
     expect(continuation).toContain('"effort":"high"');
+    const initialPayload = readWire(fetcher.mock.calls[0]?.[1]?.body);
+    const continuedPayload = readWire(fetcher.mock.calls[1]?.[1]?.body);
+    expect(continuedPayload.input.slice(0, 4)).toEqual(initialPayload.input);
+    expect(continuedPayload.input[3]).toEqual({
+      role: "developer",
+      content: taskA.content,
+    });
+    expect(initialPayload.input[0]).toEqual({
+      role: "developer",
+      content: [
+        { type: "input_text", text: "Fixed instructions", prompt_cache_breakpoint: { mode: "explicit" } },
+      ],
+    });
+    expect(continuedPayload.prompt_cache_options).toEqual({ mode: "implicit" });
   });
   it("sends official GPT-6 reasoning and image tools to Responses, not Chat Completions", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(completed());
@@ -163,5 +179,92 @@ describe("OpenAI transport and failures", () => {
       sanitizeProviderError(JSON.stringify(JSON.stringify({ token: "private-nested-token" }))),
     ).not.toContain("private-");
     expect(sanitizeProviderError("x".repeat(2000))).toHaveLength(1000);
+  });
+});
+
+const wirePayloadSchema = z
+  .object({
+    input: z.array(z.object({ role: z.string().optional() }).passthrough()),
+    prompt_cache_options: z.unknown().optional(),
+    prompt_cache_key: z.string().optional(),
+    prompt_cache_retention: z.unknown().optional(),
+  })
+  .passthrough();
+const fixedMessages: AgentContextMessage[] = [
+  { role: "system", content: "Fixed instructions", cacheBreakpoint: true },
+  { role: "user", content: "Memory and profiles" },
+  { role: "user", content: '<transcript><msg id="A" author="Alice">Hello</msg></transcript>' },
+];
+const taskA: AgentContextMessage = { role: "developer", content: '<task>{"targetMessageIds":["A"]}</task>' };
+const taskB: AgentContextMessage = { role: "developer", content: '<task>{"targetMessageIds":["B"]}</task>' };
+function readWire(body: unknown) {
+  return wirePayloadSchema.parse(JSON.parse(String(body)));
+}
+
+describe("prompt cache wire layout", () => {
+  it("keeps the reusable prefix identical when appending messages and changing targets", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => completed());
+    vi.stubGlobal("fetch", fetcher);
+    const { runner } = setup();
+    await runner.run({ sessionId: "append", messages: [...fixedMessages, taskA], allowEmptyText: true });
+    await runner.run({
+      sessionId: "append",
+      messages: [
+        ...fixedMessages,
+        { role: "user", content: '<transcript><msg id="B" author="Bob">Hi</msg></transcript>' },
+        taskB,
+      ],
+      allowEmptyText: true,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const first = readWire(fetcher.mock.calls[0]?.[1]?.body);
+    const second = readWire(fetcher.mock.calls[1]?.[1]?.body);
+    expect(second.input.slice(0, 3)).toEqual(first.input.slice(0, 3));
+    expect(first.input.map((item) => item.role)).toEqual(["developer", "user", "user", "developer"]);
+    expect(second.input.map((item) => item.role)).toEqual(["developer", "user", "user", "user", "developer"]);
+    expect(first.input.at(-1)).toEqual({
+      role: "developer",
+      content: taskA.content,
+    });
+    expect(second.input.at(-1)).toEqual({
+      role: "developer",
+      content: taskB.content,
+    });
+    expect(first.prompt_cache_key).toBe("append");
+    expect(second.prompt_cache_key).toBe(first.prompt_cache_key);
+    expect(second.prompt_cache_options).toEqual({ mode: "implicit" });
+    expect(second.prompt_cache_retention).toBeUndefined();
+    expect(first.input[0]).toEqual({
+      role: "developer",
+      content: [
+        { type: "input_text", text: "Fixed instructions", prompt_cache_breakpoint: { mode: "explicit" } },
+      ],
+    });
+  });
+  it.each([
+    ["gpt-5.5", "https://api.openai.com/v1"],
+    ["gpt-6.1-sol", "https://example.test/v1"],
+  ])("preserves task instructions without cache extensions for %s at %s", async (model, baseURL) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => Response.json({ error: { message: failure } }, { status: 400 }));
+    vi.stubGlobal("fetch", fetcher);
+    const { runner } = setup(model, baseURL);
+    await expect(
+      runner.run({ sessionId: "legacy", messages: [...fixedMessages, taskA] }),
+    ).rejects.toBeInstanceOf(AgentProviderError);
+    const body = String(fetcher.mock.calls[0]?.[1]?.body);
+    const payload = z
+      .object({ messages: z.array(z.object({ role: z.string(), content: z.unknown() })) })
+      .parse(JSON.parse(body));
+    expect(payload.messages[0]).toEqual({
+      role: "system",
+      content: `Fixed instructions\n\n${taskA.content}`,
+    });
+    expect(payload.messages.slice(1).map((item) => item.role)).toEqual(["user", "user"]);
+    expect(body).not.toContain("prompt_cache_options");
+    expect(body).not.toContain("prompt_cache_breakpoint");
+    expect(body).not.toContain("cacheBreakpoint");
+    expect(body).not.toContain("budgetGroup");
   });
 });
